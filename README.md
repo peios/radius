@@ -8,11 +8,11 @@ The native adapter uses authd Authenticate without a local logon, reads normal
 Registry configuration, checks the network's current Connect SD through
 libpeios, and emits operational events. This is a development milestone;
 packaging and broader hardware qualification remain separate work. The
-TTLS/PAP path has passed a real UniFi/iPhone trial.
+TTLS/PAP and PEAP/MSCHAPv2 paths have passed real UniFi/iPhone trials.
 
 The core implements UDP RADIUS authentication with mandatory request integrity,
-EAP-TTLSv0/PAP and PEAPv0/EAP-MSCHAPv2 using Rustls/ring, with explicit admission before success or key
-delivery. It owns bounded, short-lived conversations rather than hours-long
+EAP-TTLSv0/PAP and PEAPv0/EAP-MSCHAPv2 using Rustls/ring, with explicit admission
+before success or key delivery. It owns bounded, short-lived conversations rather than hours-long
 Wi-Fi sessions. See the [technical reference](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/1--architecture.md).
 
 ## Build and test
@@ -75,8 +75,9 @@ For an offline VM with persistent state and replaceable raw binaries, see
 
 The disposable native `tests/native/mschapv2.sh` gate covers PEAP and TTLS
 coexistence, source verification, password changes, and the NT storage and
-backfill controls. PEAP uses TLS 1.2; TTLS supports TLS 1.2 and 1.3. PEAP
-onboarding on an actual iPhone remains to be qualified.
+backfill controls. PEAP uses TLS 1.2; TTLS supports TLS 1.2 and 1.3. A
+profile-free iPhone join through PEAP has succeeded in the UniFi development
+trial. Roaming and AP reauthentication enforcement remain to be qualified.
 
 Accounting, proxying, further EAP methods, resumption, and application SSO are
 outside this slice. The later kernel-backed advisory API and public read-only

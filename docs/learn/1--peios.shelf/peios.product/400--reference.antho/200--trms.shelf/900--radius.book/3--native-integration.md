@@ -169,9 +169,9 @@ invalidation, and cancellation. Native SDK tests cover typed claims,
 known absence, and missing device or audit context.
 
 Passing these checks is development evidence, not a production release
-or a complete security audit. Real UniFi/iPhone TTLS/PAP connectivity has
-been demonstrated separately; PEAP hardware onboarding, roaming, and AP
-reauthentication enforcement need their own qualification. PEAP/MSCHAPv2
-is part of completing the MVP. After this extension, replace the temporary
+or a complete security audit. Real UniFi/iPhone TTLS/PAP connectivity and
+a profile-free iPhone join through PEAP have succeeded in development
+trials. Roaming and AP reauthentication enforcement need their own
+qualification. After this MVP, replace the temporary
 userspace checker with the planned kernel API and add generic public
 Registry read snapshots before further feature expansion.

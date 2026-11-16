@@ -1,0 +1,11 @@
+import "github.com/gcslib/rust"
+
+def test unit(tests: List<rust.RustTest> = rust.tests(crates(), "radius-core")) {
+    let each = for test in tests { = rust.run_test(test) }
+}
+
+def test clippy(checked: List<List<{}>> = for each in ["radius-core", "radius-fixture"] {
+    = rust.clippy(crates(), each, flags = ["-Dwarnings"])
+}) {}
+
+def test doctests(checked: List<{}> = rust.doctests(crates(), "radius-core")) {}

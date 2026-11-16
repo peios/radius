@@ -1,0 +1,23 @@
+sitename = "Peios Learn"
+title = "RADIUS Protocol Development"
+description = "Architecture and qualification of the Peios RADIUS protocol core."
+footer = "Peios Learn"
+featured = ["peios"]
+
+[lint]
+rules = [
+  "spelling", "em-dash", "double-hyphen", "curly-quotes",
+  "invisible-characters", "exclamation", "ampersand", "double-space",
+  "title-case", "heading-case", "heading-punctuation", "heading-levels",
+  "code-language", "shell-prompt", "line-length", "hex-case", "serial-comma",
+]
+line_length = 78
+proper_nouns = [
+  "Peios", "Rust", "Rustls", "Cargo", "OpenSSL", "RADIUS", "UDP",
+  "EAP", "TTLS", "TTLSv0", "PAP", "TLS", "MD5", "HMAC", "KACS",
+  "SID", "SIDs", "NAS", "AVP", "AVPs", "MPPE", "AP", "APs",
+  "UniFi", "SSO", "SHA", "GNU", "Make", "ring", "authd", "radiusd",
+]
+
+[lint.spelling]
+banned-words = ["banned-words.txt"]

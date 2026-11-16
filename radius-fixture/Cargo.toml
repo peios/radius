@@ -1,0 +1,16 @@
+[package]
+name = "radius-fixture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "radius-test-server"
+path = "src/main.rs"
+
+[dependencies]
+radius-core = { path = "../radius-core" }
+rustls.workspace = true
+subtle.workspace = true
+zeroize.workspace = true

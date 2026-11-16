@@ -68,6 +68,9 @@ For native configuration and disposable-guest qualification, see
 [Native Integration](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/3--native-integration.md),
 [radiusd.regman](docs/radiusd.regman), and [radiusd.evman](docs/radiusd.evman).
 
+For an offline VM with persistent state and replaceable raw binaries, see
+[Persistent Development VM](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/4--development-vm.md).
+
 Accounting, proxying, additional EAP methods, resumption, and application SSO are
 outside this slice. The later kernel-backed advisory API and public read-only
 Registry snapshot milestone remains required before expanding the initial

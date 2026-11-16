@@ -18,6 +18,7 @@ pub struct Request<'a> {
     pub authenticator: [u8; 16],
     pub state: Option<[u8; 16]>,
     pub station: Option<&'a [u8]>,
+    pub called_station: Option<&'a [u8]>,
     pub eap: Vec<u8>,
     pub canonical: &'a [u8],
 }
@@ -36,6 +37,7 @@ impl<'a> Request<'a> {
         let bytes = &bytes[..len];
         let mut state = None;
         let mut station = None;
+        let mut called_station = None;
         let mut ma = None;
         let mut eap = Vec::new();
         let mut eap_ended = false;
@@ -59,6 +61,11 @@ impl<'a> Request<'a> {
                         return Err(Error::Malformed);
                     }
                     state = Some(value.try_into().map_err(|_| Error::Malformed)?);
+                }
+                30 => {
+                    if called_station.replace(value).is_some() || value.is_empty() {
+                        return Err(Error::Malformed);
+                    }
                 }
                 31 => {
                     if station.replace(value).is_some() || value.is_empty() {
@@ -98,6 +105,7 @@ impl<'a> Request<'a> {
             authenticator: bytes[4..20].try_into().map_err(|_| Error::Malformed)?,
             state,
             station,
+            called_station,
             eap,
             canonical: bytes,
         })
@@ -151,6 +159,29 @@ pub(crate) fn response(
     state: Option<[u8; 16]>,
     msk: Option<&[u8]>,
 ) -> Result<Vec<u8>, Error> {
+    response_with_reauthentication(
+        request_id,
+        request_auth,
+        secret,
+        code,
+        eap,
+        state,
+        msk,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn response_with_reauthentication(
+    request_id: u8,
+    request_auth: &[u8; 16],
+    secret: &[u8],
+    code: u8,
+    eap: &[u8],
+    state: Option<[u8; 16]>,
+    msk: Option<&[u8]>,
+    reauthenticate_seconds: Option<u32>,
+) -> Result<Vec<u8>, Error> {
     let mut out = vec![code, request_id, 0, 0];
     out.extend_from_slice(request_auth);
     // First attribute: strict MA, including for Reject and Challenge.
@@ -160,6 +191,13 @@ pub(crate) fn response(
     }
     if let Some(state) = state {
         attribute(&mut out, 24, &state)?;
+    }
+    if let Some(seconds) = reauthenticate_seconds {
+        if code != 2 || seconds == 0 {
+            return Err(Error::Configuration);
+        }
+        attribute(&mut out, 27, &seconds.to_be_bytes())?;
+        attribute(&mut out, 29, &1u32.to_be_bytes())?;
     }
     if let Some(msk) = msk {
         if code != 2 || msk.len() != 64 {

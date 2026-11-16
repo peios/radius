@@ -4,7 +4,7 @@
       "prefix": "github.com/gcslib/rust",
       "git": "https://github.com/gcslib/rust",
       "dir": "",
-      "rev": "HEAD"
+      "rev": "6d2dbb1a663f5143ac1beb378b7613b680b07ccc"
     },
     {
       "prefix": "github.com/gcslib/buildenv",
@@ -15,6 +15,36 @@
     {
       "prefix": "github.com/gcslib/gcc",
       "git": "https://github.com/gcslib/gcc",
+      "dir": "",
+      "rev": "HEAD"
+    },
+    {
+      "prefix": "github.com/peios/peios-rs",
+      "git": "https://github.com/peios/peios-rs",
+      "dir": "",
+      "rev": "3950d35950c46cb3538885b7cf05bde059393def"
+    },
+    {
+      "prefix": "github.com/peios/peios-sdk",
+      "git": "https://github.com/peios/peios-sdk",
+      "dir": "",
+      "rev": "0edd31223cef7b9a0b920ec40e2ad493e2232024"
+    },
+    {
+      "prefix": "github.com/peios/authd",
+      "git": "https://github.com/peios/authd",
+      "dir": "",
+      "rev": "e968145cef726274cb560c663d93b82e475e11ba"
+    },
+    {
+      "prefix": "github.com/gcslib/python",
+      "git": "https://github.com/gcslib/python",
+      "dir": "",
+      "rev": "HEAD"
+    },
+    {
+      "prefix": "github.com/gcslib/clang",
+      "git": "https://github.com/gcslib/clang",
       "dir": "",
       "rev": "HEAD"
     }
@@ -28,6 +58,13 @@
       "tree": "a550d562a8baa002c5979c5c635467544e8ff970decd7e97472836193242c6b8"
     },
     {
+      "path": "github.com/gcslib/clang",
+      "git": "https://github.com/gcslib/clang",
+      "dir": "",
+      "commit": "4e0a0a349125c4daf347bdd7eabd1101ab9cae64",
+      "tree": "38e3d12d624e3d332ce63d4c07396be3a1eb4d8fab0c3cda8729d563f780af8f"
+    },
+    {
       "path": "github.com/gcslib/gcc",
       "git": "https://github.com/gcslib/gcc",
       "dir": "",
@@ -35,11 +72,39 @@
       "tree": "aab08636ace401a8b5d76372594423d28ea15c3395e65197b57e2efb954cd0e0"
     },
     {
+      "path": "github.com/gcslib/python",
+      "git": "https://github.com/gcslib/python",
+      "dir": "",
+      "commit": "96702f5588b91a170d3cb46e52e29d02379a30a5",
+      "tree": "0b4e9c3d9667879294dac58a923d3a02037ec3529cfef1f8b0fb0eff48b914cc"
+    },
+    {
       "path": "github.com/gcslib/rust",
       "git": "https://github.com/gcslib/rust",
       "dir": "",
-      "commit": "fce95730bbe12d74b93f245807e5de43297f285d",
-      "tree": "fe16342e674387401b0c431456aacdc94e897c7f6c909fe37c10c5f83900834b"
+      "commit": "6d2dbb1a663f5143ac1beb378b7613b680b07ccc",
+      "tree": "8dd951231efa5dce4b67b82b18faaa2dfeb5468aeea0570cb4557f958ada845c"
+    },
+    {
+      "path": "github.com/peios/authd",
+      "git": "https://github.com/peios/authd",
+      "dir": "",
+      "commit": "e968145cef726274cb560c663d93b82e475e11ba",
+      "tree": "639883d4dc63bab2739d85853daad76e827dc8fe2f89d40061f5a5057b707088"
+    },
+    {
+      "path": "github.com/peios/peios-rs",
+      "git": "https://github.com/peios/peios-rs",
+      "dir": "",
+      "commit": "3950d35950c46cb3538885b7cf05bde059393def",
+      "tree": "f27d821bc08b493bf74d46736067023ddfbd1aa1a5bec742b60cc5acb4a4eaa2"
+    },
+    {
+      "path": "github.com/peios/peios-sdk",
+      "git": "https://github.com/peios/peios-sdk",
+      "dir": "",
+      "commit": "0edd31223cef7b9a0b920ec40e2ad493e2232024",
+      "tree": "9e76422dd0e656539d4ebb7df3c0e3fdee424eaa9e6657749be16ea8a5cfeabf"
     }
   ]
 }

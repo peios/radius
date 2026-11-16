@@ -3,9 +3,10 @@ title: Architecture
 description: Packet integrity, encrypted credential exchange, and explicit network admission in the portable RADIUS core.
 ---
 
-The `radius` repository contains the portable RADIUS authentication core
-and a host-side qualification fixture. The production daemon is named
-`radiusd`; production service wiring is not implemented in this slice.
+The `radius` repository contains the portable RADIUS authentication core,
+the native `radiusd` daemon, and a host-side qualification fixture.
+The native integration uses existing Peios services and kernel APIs;
+packaging and real AP qualification are separate milestones.
 
 ## Responsibilities
 
@@ -43,7 +44,7 @@ no user authority and need not match the inner name.
 
 `Engine::receive` returns a reply, a one-shot verification event or a
 drop. Credentials are owned by that event; its password buffer is
-erased on drop, and debug output is redacted. The future Peios adapter
+erased on drop, and debug output is redacted. The Peios adapter
 uses authd Authenticate and retains its verified identity, source groups
 and permitted claims on that same attempt. It then evaluates the
 network's Connect descriptor using the advisory access-check API.
@@ -113,7 +114,9 @@ duplicate packet. A changed packet is not mistaken for a cached request.
 
 These records last through sign-in, not through an hours-long Wi-Fi
 connection. Already admitted connection lifetime and periodic
-reauthentication belong to the later AP-facing integration.
+reauthentication belong to the AP. Successful native admissions request
+reauthentication with Session-Timeout and Termination-Action, defaulting
+to one hour. Actual AP/client enforcement still requires qualification.
 
 ## References
 

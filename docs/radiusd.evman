@@ -1,0 +1,81 @@
+--- field source.radiusd.username
+type: str
+
+The inner PAP username supplied by the peer, before identity verification.
+
+This is unverified input, including on success. It is not a SID or proof of
+identity. It can contain a typing mistake or arbitrary peer-controlled text.
+
+--- field object.radiusd.canonical-name
+type: str
+
+The canonical account name returned by authd after password verification.
+
+--- field object.radiusd.attempt.guid
+type: bin.guid
+
+The random identifier of the short-lived authentication conversation.
+
+--- field object.radiusd.client.id
+type: uint
+
+The first eight bytes of SHA-256 of the client record name, as a big-endian integer.
+
+This identifies configuration, not an AP's asserted NAS identity.
+
+--- field object.radiusd.network.id
+type: uint
+
+The first eight bytes of SHA-256 of the network record name, as a big-endian integer.
+
+--- event radiusd.exchange.attempted
+tier: standard
+gating: integrity-checked exchanges allocated a server conversation
+cardinality: once when the logical conversation terminates; retransmissions write none
+
+A RADIUS authentication conversation ended.
+
+Success means that current network policy granted Connect and the UDP socket
+accepted the Access-Accept for transmission. It does not prove that the AP
+received it or admitted a device. Timeout and binding invalidation also end
+conversations. Invalid initial datagrams and requests rejected before state
+allocation write none. Reporting failure does not change admission.
+
+This operational event is not a kernel access-audit record and does not
+satisfy SACL audit requirements. It contains no password, shared secret,
+private key, raw credential packet, or disclosed claim values.
+
+field: subject.token.sid                    required
+  The radiusd service account emitting the event, not the Wi-Fi user.
+field: source.radiusd.username              optional
+  Present after a valid UTF-8 inner username reaches credential verification.
+field: object.radiusd.attempt.guid          required
+field: object.radiusd.client.id             required
+field: object.radiusd.network.id            required
+field: object.radiusd.canonical-name        optional
+  Present only after authd verified the password, including later denials.
+field: object.account.sid                   optional
+  Present together with the canonical name; the verified user's SID.
+field: outcome.success                      required
+field: outcome.reason                       when outcome.success == false
+  values: authentication-failed | permission-denied | missing-context | authority-unavailable | conversation-limit | timed-out | binding-changed | protocol-error | undelivered
+  closed: false
+
+--- event radiusd.configuration.loaded
+tier: standard
+gating: startup and observed configuration changes or transitions to unavailable
+cardinality: once per validated activation or observed transition to invalid configuration
+
+The service activated configuration or paused admissions because it could not.
+
+An activation is a validated collection of ordinary Registry reads, not an
+atomic snapshot. A failure retains old sockets and bounded conversations but
+blocks new admissions and cached success replies until validation recovers.
+
+field: subject.token.sid                    required
+field: config.root                          required
+  Always Machine\Software\Radius.
+field: outcome.success                      required
+field: outcome.reason                       when outcome.success == false
+  values: invalid-or-unavailable
+  closed: false

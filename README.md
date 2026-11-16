@@ -1,9 +1,13 @@
 # Peios RADIUS
 
-`radius` is the Peios RADIUS repository. The production daemon will be named
-`radiusd`. This first slice provides the portable `radius-core` library and a
-separate, loopback-only `radius-test-server` qualification fixture. It does not
-yet provide a production daemon, authd/registry integration or service units.
+`radius` is the Peios RADIUS repository. It contains the portable `radius-core`
+library, the native Peios `radiusd` daemon, and a separate loopback-only
+`radius-test-server` qualification fixture.
+
+The native adapter uses authd Authenticate without a local logon, reads normal
+Registry configuration, checks the network's current Connect SD through
+libpeios, and emits operational events. This is a development milestone;
+packaging and real UniFi/client qualification remain separate work.
 
 The core implements UDP RADIUS authentication with mandatory request integrity,
 EAP-TTLSv0/PAP using Rustls/ring and explicit admission before success or key
@@ -40,9 +44,10 @@ Direct component targets, without any packaging:
 ```sh
 pekit test -j 2 unit clippy doctests
 pekit build -j 2 test_server
+pekit build -j 2 radiusd
 ```
 
-The raw harness executable is reported by `pekit build`. Pass it to the same
+The raw executable paths are reported by `pekit build`. Pass the harness to the
 interoperability runner. No target builds an image, kernel or `pkgs/` package.
 
 ## Current boundary
@@ -59,7 +64,11 @@ admission denial. It does not simulate the complete authd contract. It refuses
 non-loopback listeners and has no deployment configuration. Do not use it to
 authenticate a real network.
 
-Accounting, proxying, additional EAP methods, resumption and application SSO are
-outside this slice. Native Peios and real UniFi/device qualification follow the
-production integration. The later kernel-backed advisory API milestone remains
-required before expanding the initial home-Wi-Fi feature set.
+For native configuration and disposable-guest qualification, see
+[Native Integration](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/3--native-integration.md),
+[radiusd.regman](docs/radiusd.regman), and [radiusd.evman](docs/radiusd.evman).
+
+Accounting, proxying, additional EAP methods, resumption, and application SSO are
+outside this slice. The later kernel-backed advisory API and public read-only
+Registry snapshot milestone remains required before expanding the initial
+home-Wi-Fi feature set.

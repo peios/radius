@@ -1,11 +1,31 @@
 import "github.com/gcslib/rust"
+import "github.com/peios/peios-rs" as peios_rs
+import build libauth from "github.com/peios/authd"
 
 def test unit(tests: List<rust.RustTest> = rust.tests(crates(), "radius-core")) {
     let each = for test in tests { = rust.run_test(test) }
 }
 
-def test clippy(checked: List<List<{}>> = for each in ["radius-core", "radius-fixture"] {
+def test integration(tests: List<rust.RustTest> = rust.tests(crates(), "radiusd")) {
+    let each = for test in tests { = rust.run_test(test) }
+}
+
+def test native(
+    tests: List<rust.RustTest> = rust.tests(native_crates(), "radiusd", features = ["native"]),
+    given: List<{at: String, place: Dir | File}> = [...peios_rs.runtime(), {at = "/opt/peios/lib/libauth.so.1"; place = build libauth()}],
+) {
+    let each = for test in tests {
+        = rust.run_test(test,
+            given = given,
+            env = [{key = "LD_LIBRARY_PATH"; value = "/opt/peios/lib"}],
+        )
+    }
+}
+
+def test clippy(checked: List<List<{}>> = for each in ["radius-core", "radius-fixture", "radiusd"] {
     = rust.clippy(crates(), each, flags = ["-Dwarnings"])
 }) {}
+
+def test native_clippy(checked: List<{}> = rust.clippy(native_crates(), "radiusd", features = ["native"], flags = ["-Dwarnings"])) {}
 
 def test doctests(checked: List<{}> = rust.doctests(crates(), "radius-core")) {}

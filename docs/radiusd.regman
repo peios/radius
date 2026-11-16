@@ -1,0 +1,238 @@
+--- machine\software\radius
+canonical: Machine\Software\Radius
+
+Configuration of the radiusd RADIUS authentication service.
+
+Administrators own these keys; radiusd needs read and subtree-notify access.
+It has no configuration-write authority. Configuration is watched and
+revalidated periodically, including referenced files. Invalid, unreadable, or
+pending configuration pauses successful admissions. Reads are deliberately
+non-transactional for this milestone; concurrent edits can form a mixed but
+valid configuration. Use administrative transactions for related changes.
+
+--- machine\software\radius\settings
+canonical: Machine\Software\Radius\Settings
+
+Listener addresses and bounded authentication-conversation resources.
+
+--- machine\software\radius\settings listen
+canonical: Machine\Software\Radius\Settings Listen
+type: REG_MULTI_SZ
+default: (required)
+valid: 1–16 distinct literal IPv4 or IPv6 socket addresses with nonzero ports
+applies: live
+
+UDP listeners, such as 0.0.0.0:1812 and [::]:1812.
+
+IPv6 sockets are IPv6-only. Hostnames and mapped IPv6 addresses are refused.
+The service SID also needs PORT_BIND in the normal port-reservation SD.
+Changing the listener set cancels pending exchanges and cached replies.
+
+--- machine\software\radius\settings idletimeoutseconds
+canonical: Machine\Software\Radius\Settings IdleTimeoutSeconds
+type: REG_DWORD
+default: 30
+valid: 1–3600
+applies: live (new exchanges)
+
+Maximum inactivity during an authentication conversation.
+
+--- machine\software\radius\settings overalltimeoutseconds
+canonical: Machine\Software\Radius\Settings OverallTimeoutSeconds
+type: REG_DWORD
+default: 120
+valid: 1–3600
+applies: live (new exchanges)
+
+Fixed total conversation lifetime, including time spent waiting for authd.
+
+Progress and configuration changes never extend an existing deadline.
+
+--- machine\software\radius\settings replycacheseconds
+canonical: Machine\Software\Radius\Settings ReplyCacheSeconds
+type: REG_DWORD
+default: 15
+valid: 1–3600
+applies: live (new cache entries)
+
+Lifetime of exact retransmission replies.
+
+--- machine\software\radius\settings maxattempts
+canonical: Machine\Software\Radius\Settings MaxAttempts
+type: REG_DWORD
+default: 256
+valid: 1–65536
+applies: live
+
+Global bound on allocated authentication conversations.
+
+Lowering this bound stops new allocation without extending existing work.
+
+--- machine\software\radius\settings maxattemptsperclient
+canonical: Machine\Software\Radius\Settings MaxAttemptsPerClient
+type: REG_DWORD
+default: 32
+valid: 1–65536
+applies: live
+
+Conversation allocation bound per trusted client definition.
+
+--- machine\software\radius\settings maxcachedreplies
+canonical: Machine\Software\Radius\Settings MaxCachedReplies
+type: REG_DWORD
+default: 1024
+valid: 1–65536
+applies: live
+
+Maximum cached RADIUS replies; oldest entries are evicted at capacity.
+
+--- machine\software\radius\settings fragmentbytes
+canonical: Machine\Software\Radius\Settings FragmentBytes
+type: REG_DWORD
+default: 1000
+valid: 64–3000
+applies: live (new exchanges)
+
+Maximum outgoing EAP-TTLS fragment payload.
+
+--- machine\software\radius\settings maxverifications
+canonical: Machine\Software\Radius\Settings MaxVerifications
+type: REG_DWORD
+default: 32
+valid: 1–MaxAttempts
+applies: live
+
+Maximum simultaneous asynchronous authd credential verifications.
+
+At capacity a newly verification-ready attempt fails without keys. There is
+no unbounded queue. Lowering the limit does not restart existing work.
+
+--- machine\software\radius\tls
+canonical: Machine\Software\Radius\TLS
+
+Server credentials for EAP-TTLS; individual client certificates are not required.
+
+Provision immutable, administrator-owned, protected regular files. Referenced
+files must be singly linked and are opened without following a final symlink.
+Only SYSTEM or Administrators may modify credentials. radiusd can read them.
+Use a protected parent directory as well. Public certificates can grant other
+principals read/execute access; private keys and AP secrets cannot.
+
+--- machine\software\radius\tls certificatefiles
+canonical: Machine\Software\Radius\TLS CertificateFiles
+type: REG_MULTI_SZ
+default: (required)
+valid: 1–16 absolute paths to DER certificates, each at most 65536 bytes
+applies: live (new exchanges)
+
+Ordered certificate chain, starting with the server certificate.
+
+Clients must trust its CA and validate the expected server name. A certificate
+renewal changes new TLS exchanges while bounded existing exchanges complete.
+
+--- machine\software\radius\tls privatekeyfile
+canonical: Machine\Software\Radius\TLS PrivateKeyFile
+type: REG_SZ
+default: (required)
+valid: absolute path to an unencrypted DER private key, at most 65536 bytes
+applies: live (new exchanges)
+
+Protected private key matching the first certificate.
+
+Write new protected files first, then transactionally switch references. Keep
+old files until their references and any bounded readers have been released.
+
+--- machine\software\radius\clients\<client>
+canonical: Machine\Software\Radius\Clients\<client>
+
+A trusted RADIUS client definition, selected by the actual UDP source address.
+
+Record identifiers contain 1–64 lowercase ASCII letters, digits, or hyphens.
+At most 256 client definitions are accepted. The most-specific source prefix
+wins. Equal duplicate prefixes are invalid. A bad secret never falls back to
+a less-specific client. NAS attributes cannot select a trusted definition.
+
+--- machine\software\radius\clients\<client> addresses
+canonical: Machine\Software\Radius\Clients\<client> Addresses
+type: REG_MULTI_SZ
+default: (required)
+valid: 1–256 canonical literal IPv4/IPv6 addresses or CIDR prefixes
+applies: live
+
+Actual packet sources permitted to use this client's secret.
+
+Prefixes with host bits and mapped IPv6 addresses are invalid. Trust edits
+cancel affected pending exchanges and cached replies.
+
+--- machine\software\radius\clients\<client> secretfile
+canonical: Machine\Software\Radius\Clients\<client> SecretFile
+type: REG_SZ
+default: (required)
+valid: absolute path to a protected regular file containing 16–1024 secret bytes
+applies: live
+
+AP shared secret, read as exact bytes without trimming or newline removal.
+
+Rotating it invalidates affected pending exchanges and cached replies. The
+Registry contains the file reference rather than the shared secret itself.
+
+--- machine\software\radius\clients\<client> networks
+canonical: Machine\Software\Radius\Clients\<client> Networks
+type: REG_MULTI_SZ
+default: (required)
+valid: 1–256 existing network record identifiers with distinct SSIDs
+applies: live
+
+Networks this client may serve.
+
+An initial request must carry an integrity-protected Called-Station-Id with a
+valid MAC prefix and exact SSID. Missing, malformed, or unmapped names have no
+fallback, even when only one network is allowed. A continuation keeps its
+original binding; a supplied SSID must still match it.
+
+--- machine\software\radius\networks\<network>
+canonical: Machine\Software\Radius\Networks\<network>
+
+A network admission policy, independent of identity verification in authd.
+
+At most 256 networks are accepted. Record names follow the client-name rules.
+
+--- machine\software\radius\networks\<network> ssid
+canonical: Machine\Software\Radius\Networks\<network> SSID
+type: REG_SZ
+default: (required)
+valid: nonempty UTF-8 text, at most 32 bytes
+applies: live
+
+Exact, case-sensitive SSID advertised by the AP.
+
+Renaming an SSID invalidates conversations bound to the previous name.
+
+--- machine\software\radius\networks\<network> connectsecurity
+canonical: Machine\Software\Radius\Networks\<network> ConnectSecurity
+type: REG_SZ or REG_BINARY
+default: (required)
+valid: SDDL or a validated self-relative security descriptor, at most 65536 bytes
+applies: live (at final admission)
+
+Ordinary security descriptor for the network's Connect right, mask 0x1.
+
+Generic read, execute, and all map to Connect; generic write maps to zero.
+Supply an owner. An absent DACL deliberately grants access; an empty DACL
+denies it. Missing identity context, unsupported execution context, and SACL
+audit requirements fail closed. The temporary userspace checker creates no
+kernel token and cannot impersonate the user. Source groups are used as
+returned by authd, without inventing local-session or built-in memberships.
+
+--- machine\software\radius\networks\<network> reauthenticateseconds
+canonical: Machine\Software\Radius\Networks\<network> ReauthenticateSeconds
+type: REG_DWORD
+default: 3600
+valid: 1–4294967295
+applies: live (next successful admission)
+
+Requested AP reauthentication interval, in seconds.
+
+Access-Accept carries signed Session-Timeout and Termination-Action equal to
+RADIUS-Request. This requests future authentication; it does not disconnect an
+existing station immediately. Actual AP/client enforcement needs qualification.

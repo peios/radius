@@ -5,7 +5,7 @@ description: Running the independent supplicant gate and understanding what its 
 
 The interoperability gate tests the protocol core against an independent
 OpenSSL-backed supplicant over loopback. It checks the encrypted exchange
-and actual exported Wi-Fi key agreement before Peios integration is added.
+and actual exported Wi-Fi key agreement independently of Peios services.
 
 ## Running the gate
 
@@ -56,8 +56,7 @@ binding changes, one-shot admission and rejection without key delivery.
 ## Limits of the evidence
 
 Passing this gate establishes host-side protocol behavior for the tested
-tool and cases. It does not establish native Peios runtime behavior,
-authd disclosure policy, registry loading, service capabilities, real AP
-reauthentication or device onboarding. Those require the next integration
-slice and qualification on actual equipment. A passing suite is not a
-claim that a complete security audit has been performed.
+tool and cases. Native qualification is described in
+[Native Integration](~peios/reference/radius/native-integration). Neither gate establishes
+real AP reauthentication or device onboarding. Those require actual
+equipment. A passing suite is not a complete security audit.

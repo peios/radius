@@ -68,6 +68,7 @@ impl Limits {
             || self.overall > Duration::from_secs(3600)
             || self.cache_lifetime > Duration::from_secs(3600)
             || self.attempts > 65536
+            || self.per_client > 65536
             || self.cached_replies > 65536
         {
             return Err(Error::Configuration);
@@ -203,6 +204,25 @@ impl Engine {
     }
     pub fn active_attempts(&self) -> usize {
         self.attempts.len()
+    }
+
+    /// Replace the certificate for future attempts; existing TLS conversations
+    /// retain their original configuration. Apply only a fully validated config.
+    pub fn update_tls(&mut self, tls: Arc<rustls::ServerConfig>) -> Result<(), Error> {
+        Self::new(tls.clone(), self.limits.clone())?;
+        self.tls = tls;
+        Ok(())
+    }
+
+    pub fn has_attempt(&self, id: &[u8; 16]) -> bool {
+        self.attempts.contains_key(id)
+    }
+
+    /// Invalidate both conversations and cached terminal/challenge replies when
+    /// the driver removes a trusted client/network binding.
+    pub fn retain_bindings(&mut self, mut valid: impl FnMut(&Binding) -> bool) {
+        self.attempts.retain(|_, attempt| valid(&attempt.binding));
+        self.cache.retain(|reply| valid(&reply.key.binding));
     }
 
     /// Parse/integrity errors are returned to the driver for redacted counters;
@@ -392,6 +412,22 @@ impl Engine {
         current: Client<'_>,
         admission: Admission,
     ) -> Result<Reply, Error> {
+        self.finish_with_reauthentication(now, id, current, admission, None)
+    }
+
+    /// Session attributes are included before response integrity and caching.
+    /// Only an explicit successful admission may request AP reauthentication.
+    pub fn finish_with_reauthentication(
+        &mut self,
+        now: Instant,
+        id: [u8; 16],
+        current: Client<'_>,
+        admission: Admission,
+        reauthenticate_seconds: Option<u32>,
+    ) -> Result<Reply, Error> {
+        if reauthenticate_seconds == Some(0) {
+            return Err(Error::Configuration);
+        }
         self.expire(now);
         let mut attempt = self.attempts.remove(&id).ok_or(Error::UnknownAttempt)?;
         let secret_tag: [u8; 32] = digest::digest(&digest::SHA256, current.secret)
@@ -410,7 +446,7 @@ impl Engine {
         } else {
             None
         };
-        let bytes = wire::response(
+        let bytes = wire::response_with_reauthentication(
             pending.radius_id,
             &pending.request_auth,
             &pending.secret,
@@ -418,6 +454,11 @@ impl Engine {
             &wire::eap_terminal(pending.eap_id, granted),
             None,
             msk.as_ref().map(|m| m.as_slice()),
+            if granted {
+                reauthenticate_seconds
+            } else {
+                None
+            },
         )?;
         let peer = pending.key.peer;
         self.remember(now, pending.key, bytes.clone());

@@ -63,6 +63,13 @@ fn decoded(reply: &[u8]) -> (Vec<u8>, Option<[u8; 16]>) {
     (eap, state)
 }
 fn setup(limits: Limits) -> (Engine, ClientConnection) {
+    let (engine, config) = setup_config(limits);
+    (
+        engine,
+        ClientConnection::new(config, ServerName::try_from("radius.test").unwrap()).unwrap(),
+    )
+}
+fn setup_config(limits: Limits) -> (Engine, Arc<ClientConfig>) {
     let certified = rcgen::generate_simple_self_signed(vec!["radius.test".into()]).unwrap();
     let cert = certified.cert.der().clone();
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
@@ -77,14 +84,7 @@ fn setup(limits: Limits) -> (Engine, ClientConnection) {
             .unwrap()
             .with_root_certificates(roots)
             .with_no_client_auth();
-    (
-        Engine::new(server, limits).unwrap(),
-        ClientConnection::new(
-            Arc::new(client),
-            ServerName::try_from("radius.test").unwrap(),
-        )
-        .unwrap(),
-    )
+    (Engine::new(server, limits).unwrap(), Arc::new(client))
 }
 fn peer() -> SocketAddr {
     "127.0.0.1:12345".parse().unwrap()
@@ -380,13 +380,21 @@ fn pending() -> (Engine, Verification, Vec<u8>, Instant) {
 
 #[test]
 fn peap_negotiates_and_completes_only_after_tunneled_confirmation() {
-    use std::io::Read;
-    let methods = [Method::PeapMschapv2, Method::TtlsPap];
-    let (mut engine, mut tls_client) = setup(Limits {
+    let (mut engine, tls_client) = setup(Limits {
         frame_payload: 128,
         ..Limits::default()
     });
-    let now = Instant::now();
+    peap_exchange(&mut engine, tls_client, Instant::now(), Admission::Granted);
+}
+
+fn peap_exchange(
+    engine: &mut Engine,
+    mut tls_client: ClientConnection,
+    now: Instant,
+    final_admission: Admission,
+) {
+    use std::io::Read;
+    let methods = [Method::PeapMschapv2, Method::TtlsPap];
     let mut output = reply(
         engine
             .receive_with_methods(now, peer(), client(binding()), &identity(1), &methods)
@@ -500,18 +508,29 @@ fn peap_negotiates_and_completes_only_after_tunneled_confirmation() {
                 assert_eq!(output[0], 11);
             }
             Outcome::Drop => {
-                let accepted = engine
+                let terminal = engine
                     .finish_with_protocol(
                         now,
                         id.unwrap(),
                         client(binding()),
-                        Admission::Granted,
+                        final_admission,
                         Some(3600),
                         Some([0xab; 20]),
                     )
                     .unwrap();
-                assert_eq!(accepted.bytes[0], 2);
-                assert_eq!(decoded(&accepted.bytes).0[0], 3);
+                let granted = final_admission == Admission::Granted;
+                assert_eq!(terminal.bytes[0], if granted { 2 } else { 3 });
+                assert_eq!(decoded(&terminal.bytes).0[0], if granted { 3 } else { 4 });
+                if !granted {
+                    let mut offset = 20;
+                    while offset < terminal.bytes.len() {
+                        assert_ne!(
+                            terminal.bytes[offset], 26,
+                            "denied reply contained key attributes"
+                        );
+                        offset += usize::from(terminal.bytes[offset + 1]);
+                    }
+                }
                 assert_eq!(engine.active_attempts(), 0);
                 assert!(backend_called && proof_seen);
                 return;
@@ -519,6 +538,79 @@ fn peap_negotiates_and_completes_only_after_tunneled_confirmation() {
         }
     }
     panic!("PEAP did not finish");
+}
+
+#[test]
+fn repeated_peap_exchanges_release_state_and_recheck_final_admission() {
+    let (mut engine, config) = setup_config(Limits {
+        attempts: 1,
+        per_client: 1,
+        cached_replies: 4,
+        frame_payload: 128,
+        ..Limits::default()
+    });
+    let now = Instant::now();
+    for cycle in 0..96 {
+        let client =
+            ClientConnection::new(config.clone(), ServerName::try_from("radius.test").unwrap())
+                .unwrap();
+        let admission = match cycle % 3 {
+            0 => Admission::Granted,
+            1 => Admission::Denied,
+            _ => Admission::BackendFailure,
+        };
+        // Reuse packet identifiers after the reply cache has expired, without sleeping.
+        peap_exchange(
+            &mut engine,
+            client,
+            now + Duration::from_secs(cycle * 16),
+            admission,
+        );
+        assert_eq!(engine.active_attempts(), 0);
+    }
+}
+
+#[test]
+fn repeated_abandoned_peap_attempts_stay_bounded_and_expire() {
+    let (mut engine, _) = setup_config(Limits {
+        attempts: 8,
+        per_client: 8,
+        cached_replies: 4,
+        ..Limits::default()
+    });
+    let now = Instant::now();
+    for cycle in 0..128 {
+        let now = now + Duration::from_secs(cycle * 32);
+        engine.expire(now);
+        assert_eq!(engine.active_attempts(), 0);
+        for id in 1..=8 {
+            assert!(matches!(
+                engine
+                    .receive_with_methods(
+                        now,
+                        peer(),
+                        client(binding()),
+                        &identity(id),
+                        &[Method::PeapMschapv2],
+                    )
+                    .unwrap(),
+                Outcome::Reply(_)
+            ));
+            assert_eq!(engine.active_attempts(), usize::from(id));
+        }
+        assert!(matches!(
+            engine.receive_with_methods(
+                now,
+                peer(),
+                client(binding()),
+                &identity(9),
+                &[Method::PeapMschapv2],
+            ),
+            Err(Error::Limit)
+        ));
+    }
+    engine.expire(now + Duration::from_secs(128 * 32));
+    assert_eq!(engine.active_attempts(), 0);
 }
 
 #[test]

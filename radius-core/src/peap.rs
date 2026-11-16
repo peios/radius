@@ -152,6 +152,105 @@ impl Peap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn response() -> Vec<u8> {
+        let mut bytes = vec![26, 2, 1, 0, 58, 49];
+        bytes.extend_from_slice(&[1; 16]);
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend_from_slice(&[2; 24]);
+        bytes.push(0);
+        bytes.extend_from_slice(b"User");
+        bytes
+    }
+
+    fn awaiting_response() -> Peap {
+        let mut peap = Peap::new();
+        assert!(matches!(peap.process(&[]).unwrap(), Inner::Send(_)));
+        assert!(matches!(
+            peap.process(b"\x01User").unwrap(),
+            Inner::Verify(_)
+        ));
+        peap.challenge([7; 16]).unwrap();
+        peap
+    }
+
+    #[test]
+    fn truncated_and_mutated_proofs_cannot_bypass_framing_or_identity_binding() {
+        let valid = response();
+        for length in 0..valid.len() {
+            let mut peap = awaiting_response();
+            assert!(matches!(
+                peap.process(&valid[..length]).unwrap(),
+                Inner::More
+            ));
+            assert!(!peap.complete());
+        }
+        for offset in 0..valid.len() {
+            for value in 0..=u8::MAX {
+                if value == valid[offset] {
+                    continue;
+                }
+                let mut changed = valid.clone();
+                changed[offset] = value;
+                let mut peap = awaiting_response();
+                let result = peap.process(&changed);
+                // Proof bytes belong to the authority to verify. All other bytes
+                // bind this response to the expected framing and inner identity.
+                let proof_byte = (6..22).contains(&offset) || (30..54).contains(&offset);
+                assert_eq!(matches!(result, Ok(Inner::Response(_))), proof_byte);
+                assert!(!peap.complete());
+            }
+        }
+        let mut trailing = valid;
+        trailing.push(0);
+        assert!(awaiting_response().process(&trailing).is_err());
+    }
+
+    #[test]
+    fn truncated_and_mutated_confirmations_cannot_complete_authentication() {
+        let confirmations: &[&[u8]] = &[&[26, 3], &[2, 1, 0, 11, 33, 0x80, 3, 0, 2, 0, 1]];
+        for (stage, &valid) in confirmations.iter().enumerate() {
+            let ready = || {
+                let mut peap = awaiting_response();
+                assert!(matches!(
+                    peap.process(&response()).unwrap(),
+                    Inner::Response(_)
+                ));
+                peap.success([0xab; 20]).unwrap();
+                if stage == 1 {
+                    assert!(matches!(
+                        peap.process(confirmations[0]).unwrap(),
+                        Inner::Send(_)
+                    ));
+                }
+                peap
+            };
+            for length in 0..valid.len() {
+                let mut peap = ready();
+                assert!(matches!(
+                    peap.process(&valid[..length]).unwrap(),
+                    Inner::More
+                ));
+                assert!(!peap.complete());
+            }
+            for offset in 0..valid.len() {
+                for value in 0..=u8::MAX {
+                    if value == valid[offset] {
+                        continue;
+                    }
+                    let mut changed = valid.to_vec();
+                    changed[offset] = value;
+                    let mut peap = ready();
+                    assert!(peap.process(&changed).is_err());
+                    assert!(!peap.complete());
+                }
+            }
+            let mut trailing = valid.to_vec();
+            trailing.push(0);
+            assert!(ready().process(&trailing).is_err());
+        }
+    }
+
     #[test]
     fn rejects_identity_switches_and_requires_both_success_acknowledgements() {
         let mut peap = Peap::new();

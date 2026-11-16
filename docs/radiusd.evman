@@ -88,9 +88,10 @@ cardinality: once per validated activation or observed transition to invalid con
 
 The service activated configuration or paused admissions because it could not.
 
-An activation is a validated collection of ordinary Registry reads, not an
-atomic snapshot. A failure retains old sockets and bounded conversations but
-blocks new admissions and cached success replies until validation recovers.
+An activation validates Registry configuration copied from one read-only
+snapshot, then separately loads its referenced credential files. A failure
+retains old sockets and bounded conversations but blocks new admissions and
+cached success replies until validation recovers.
 
 field: subject.token.sid                    required
 field: config.root                          required

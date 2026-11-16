@@ -107,11 +107,15 @@ can wait only within their original deadlines. Recovery validates the
 assembled configuration before resuming. Certificate-only renewal
 changes new TLS exchanges while existing bounded exchanges continue.
 
-This milestone deliberately uses non-transactional multi-call Registry
-reads. Watches and fingerprints detect observed changes; they provide
-no atomic-snapshot guarantee. Concurrent edits can form a mixed but
-valid configuration. Prepare protected immutable credential files, then
-transactionally switch references. Keep old files until safely unused.
+The loader copies Registry configuration through one short read-only
+transaction, including key resolution, enumeration, values and layer selection.
+It releases the snapshot before opening credential files. Capture races and
+other read errors discard the complete candidate; the worker retries on its
+normal reload cycle and keeps admission paused while configuration is invalid.
+Watches and fingerprints detect changes but do not establish read consistency.
+Prepare protected immutable credential files, then transactionally switch
+references. Keep old files until safely unused; a Registry transaction does not
+snapshot filesystem contents.
 
 `radiusd.evman` defines operational exchange and configuration events.
 The inner supplied username is explicitly unverified input; canonical
@@ -186,5 +190,5 @@ or a complete security audit. Real UniFi/iPhone TTLS/PAP connectivity and
 a profile-free iPhone join through PEAP have succeeded in development
 trials. Roaming and AP reauthentication enforcement need their own
 qualification. The supplied-subject evaluator runs in the kernel;
-generic public Registry read snapshots remain a separate follow-up before
-further feature expansion.
+the loader uses the public Registry read-snapshot API before further feature
+expansion.

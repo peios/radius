@@ -6,9 +6,10 @@ Configuration of the radiusd RADIUS authentication service.
 Administrators own these keys; radiusd needs read and subtree-notify access.
 It has no configuration-write authority. Configuration is watched and
 revalidated periodically, including referenced files. Invalid, unreadable, or
-pending configuration pauses successful admissions. Reads are deliberately
-non-transactional for this milestone; concurrent edits can form a mixed but
-valid configuration. Use administrative transactions for related changes.
+pending configuration pauses successful admissions. Registry names, values and
+layer selection are read through one bounded read-only snapshot. Its handle is
+closed before credential files are opened. Use administrative transactions for
+related edits and immutable prepared files for referenced credentials.
 
 --- machine\software\radius\settings
 canonical: Machine\Software\Radius\Settings

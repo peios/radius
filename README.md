@@ -80,6 +80,6 @@ profile-free iPhone join through PEAP has succeeded in the UniFi development
 trial. Roaming and AP reauthentication enforcement remain to be qualified.
 
 Accounting, proxying, further EAP methods, resumption, and application SSO are
-outside this slice. The later kernel-backed advisory API and public read-only
-Registry snapshot milestone remains required before expanding the initial
-home-Wi-Fi feature set.
+outside this slice. Network authorization uses the kernel supplied-subject API,
+and configuration uses a public read-only Registry snapshot. Referenced
+credential files are loaded after that snapshot is released.

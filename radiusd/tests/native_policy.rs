@@ -3,7 +3,7 @@ use peios::security::{sddl, Sid};
 use peios_auth::{
     fields, Authenticated, Capabilities, Claim, ClaimCoverage, ClaimValue, Field, Record, Reference,
 };
-use radiusd::{driver::Reason, native::authentication::evaluate};
+use radiusd::{config::Network, driver::Reason, native::authentication::evaluate};
 use std::collections::BTreeMap;
 
 const USER: &str = "S-1-5-21-1-2-3-1000";
@@ -43,10 +43,20 @@ fn subject() -> Authenticated {
 fn check(subject: &Authenticated, text: &str) -> Result<(), Reason> {
     evaluate(
         subject,
-        sddl::parse(&format!("O:SYG:SY{text}")).unwrap().as_bytes(),
+        "qualification",
+        &Network {
+            methods: vec![radius_core::Method::TtlsPap],
+            ssid: b"Qualification".to_vec(),
+            security: sddl::parse(&format!("O:SYG:SY{text}"))
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            reauthenticate_seconds: 3600,
+        },
     )
 }
 #[test]
+#[ignore = "requires a disposable Peios guest"]
 fn native_group_and_typed_claims_use_the_supplied_subject() {
     let mut s = subject();
     let sd = format!("D:(XA;;0x1;;;{GROUP};(@User.Department == \"Engineering\"))");
@@ -57,6 +67,7 @@ fn native_group_and_typed_claims_use_the_supplied_subject() {
     assert_eq!(check(&s, &sd), Err(Reason::Policy));
 }
 #[test]
+#[ignore = "requires a disposable Peios guest"]
 fn hidden_claim_is_unknown_and_cannot_satisfy_a_negative_condition() {
     let mut s = subject();
     let sd = format!("D:(XA;;0x1;;;{GROUP};(!Exists @User.Secret))");
@@ -67,12 +78,16 @@ fn hidden_claim_is_unknown_and_cannot_satisfy_a_negative_condition() {
     assert_eq!(check(&s, &sd), Ok(()));
 }
 #[test]
-fn missing_local_device_or_audit_context_never_grants() {
+#[ignore = "requires a disposable Peios guest"]
+fn missing_local_device_context_never_grants() {
     let s = subject();
-    for sd in [
-        format!("D:(XA;;0x1;;;{GROUP};(Exists @Device.Managed))"),
-        format!("D:(A;;0x1;;;{GROUP})S:(AU;SA;0x1;;;{USER})"),
-    ] {
-        assert_eq!(check(&s, &sd), Err(Reason::MissingContext));
-    }
+    let sd = format!("D:(XA;;0x1;;;{GROUP};(Exists @Device.Managed))");
+    assert_eq!(check(&s, &sd), Err(Reason::MissingContext));
+}
+
+#[test]
+#[ignore = "requires SYSTEM with enabled SeAuditPrivilege in a disposable Peios guest"]
+fn audited_network_check_uses_the_actual_caller() {
+    let sd = format!("D:(A;;0x1;;;{GROUP})S:(AU;SA;0x1;;;{USER})");
+    assert_eq!(check(&subject(), &sd), Ok(()));
 }

@@ -1,7 +1,7 @@
 use crate::config::{Client, Config, Network, Prefix, ROOT};
 use peios::{
     file::{fd_get_sd, SecInfo},
-    registry::{Key, KeyAccess, NotifyFilter, OpenFlags, RegValue, ValueType},
+    registry::{Key, KeyAccess, NotifyFilter, OpenFlags, RegValue, Transaction, ValueType},
     security::{sddl, AceType, Control, Sid, WellKnown},
 };
 use ring::digest::{Context, SHA256};
@@ -26,24 +26,35 @@ use zeroize::Zeroizing;
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
-fn open(parent: Option<&Key>, name: &str) -> io::Result<Key> {
-    Key::open(
-        parent,
+struct ConfigKey<'a> {
+    key: Key,
+    transaction: &'a Transaction,
+}
+
+fn open<'a>(
+    parent: Option<&ConfigKey<'a>>,
+    name: &str,
+    transaction: &'a Transaction,
+) -> io::Result<ConfigKey<'a>> {
+    Key::open_transacted(
+        parent.map(|parent| &parent.key),
         name,
         KeyAccess::QUERY_VALUE | KeyAccess::ENUMERATE_SUB_KEYS,
         OpenFlags::empty(),
+        Some(transaction),
     )
+    .map(|key| ConfigKey { key, transaction })
     .map_err(Into::into)
 }
-fn value(key: &Key, name: &str) -> io::Result<Option<RegValue>> {
-    match key.query_value(name.as_bytes(), None) {
+fn value(key: &ConfigKey<'_>, name: &str) -> io::Result<Option<RegValue>> {
+    match key.key.query_value(name.as_bytes(), Some(key.transaction)) {
         Ok(value) if value.data.len() <= 65536 => Ok(Some(value)),
         Ok(_) => Err(invalid("registry value too large")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
-fn required(key: &Key, name: &str) -> io::Result<RegValue> {
+fn required(key: &ConfigKey<'_>, name: &str) -> io::Result<RegValue> {
     value(key, name)?.ok_or_else(|| invalid("required registry value missing"))
 }
 fn text(value: &RegValue) -> io::Result<String> {
@@ -56,10 +67,10 @@ fn text(value: &RegValue) -> io::Result<String> {
     }
     String::from_utf8(bytes.to_vec()).map_err(|_| invalid("registry text is not UTF-8"))
 }
-fn string(key: &Key, name: &str) -> io::Result<String> {
+fn string(key: &ConfigKey<'_>, name: &str) -> io::Result<String> {
     text(&required(key, name)?)
 }
-fn strings(key: &Key, name: &str) -> io::Result<Vec<String>> {
+fn strings(key: &ConfigKey<'_>, name: &str) -> io::Result<Vec<String>> {
     let value = required(key, name)?;
     if value.ty != ValueType::MULTI_SZ || !value.data.ends_with(&[0, 0]) {
         return Err(invalid("expected terminated REG_MULTI_SZ"));
@@ -82,7 +93,7 @@ fn strings(key: &Key, name: &str) -> io::Result<Vec<String>> {
     }
     Ok(result)
 }
-fn number(key: &Key, name: &str, default: u32) -> io::Result<u32> {
+fn number(key: &ConfigKey<'_>, name: &str, default: u32) -> io::Result<u32> {
     match value(key, name)? {
         None => Ok(default),
         Some(value) if value.ty == ValueType::DWORD && value.data.len() == 4 => {
@@ -91,9 +102,9 @@ fn number(key: &Key, name: &str, default: u32) -> io::Result<u32> {
         _ => Err(invalid("expected REG_DWORD")),
     }
 }
-fn children(key: &Key) -> io::Result<Vec<String>> {
+fn children(key: &ConfigKey<'_>) -> io::Result<Vec<String>> {
     let mut result = Vec::new();
-    for entry in key.subkeys(None) {
+    for entry in key.key.subkeys(Some(key.transaction)) {
         if result.len() >= 256 {
             return Err(invalid("too many registry records"));
         }
@@ -173,12 +184,37 @@ fn material(path: &str, secret: bool, max: usize) -> io::Result<Zeroizing<Vec<u8
     Ok(bytes)
 }
 
-pub fn load() -> io::Result<Config> {
-    let root = open(None, ROOT)?;
-    let settings = open(Some(&root), "Settings")?;
-    let tls = open(Some(&root), "TLS")?;
-    let networks_key = open(Some(&root), "Networks")?;
-    let clients_key = open(Some(&root), "Clients")?;
+struct PreparedClient {
+    addresses: Vec<Prefix>,
+    secret_file: String,
+    networks: Vec<String>,
+}
+
+struct Prepared {
+    listeners: Vec<std::net::SocketAddr>,
+    limits: radius_core::Limits,
+    verifications: usize,
+    certificate_files: Vec<String>,
+    private_key_file: String,
+    clients: BTreeMap<String, PreparedClient>,
+    networks: BTreeMap<String, Network>,
+    hash: Context,
+}
+
+fn stamp(hash: &mut Context, bytes: &[u8]) {
+    hash.update(&(bytes.len() as u64).to_be_bytes());
+    hash.update(bytes);
+}
+
+/// Copy Registry-owned configuration in one bounded snapshot. Returning this
+/// description closes the transaction before any credential file is opened.
+fn read_registry() -> io::Result<Prepared> {
+    let transaction = Transaction::begin_read_only().map_err(io::Error::from)?;
+    let root = open(None, ROOT, &transaction)?;
+    let settings = open(Some(&root), "Settings", &transaction)?;
+    let tls = open(Some(&root), "TLS", &transaction)?;
+    let networks_key = open(Some(&root), "Networks", &transaction)?;
+    let clients_key = open(Some(&root), "Clients", &transaction)?;
     let listeners = strings(&settings, "Listen")?
         .iter()
         .map(|s| s.parse().map_err(|_| invalid("invalid listener address")))
@@ -194,33 +230,18 @@ pub fn load() -> io::Result<Config> {
     };
     let verifications = number(&settings, "MaxVerifications", 32)? as usize;
     let mut hash = Context::new(&SHA256);
-    fn stamp(hash: &mut Context, bytes: &[u8]) {
-        hash.update(&(bytes.len() as u64).to_be_bytes());
-        hash.update(bytes);
-    }
     stamp(
         &mut hash,
         format!("{listeners:?}{limits:?}{verifications}").as_bytes(),
     );
-    let mut certificates = Vec::new();
-    let paths = strings(&tls, "CertificateFiles")?;
-    if paths.is_empty() || paths.len() > 16 {
+    let certificate_files = strings(&tls, "CertificateFiles")?;
+    let private_key_file = string(&tls, "PrivateKeyFile")?;
+    if certificate_files.is_empty() || certificate_files.len() > 16 {
         return Err(invalid("invalid certificate chain length"));
     }
-    for path in paths {
-        let bytes = material(&path, false, 65536)?;
-        stamp(&mut hash, &bytes);
-        certificates.push(rustls::pki_types::CertificateDer::from(bytes.to_vec()));
-    }
-    let key = material(&string(&tls, "PrivateKeyFile")?, true, 65536)?;
-    stamp(&mut hash, &key);
-    let key = rustls::pki_types::PrivateKeyDer::try_from(key.to_vec())
-        .map_err(|_| invalid("private key is not DER"))?;
-    let tls = radius_core::server_config(certificates, key)
-        .map_err(|_| invalid("invalid certificate/key pair"))?;
     let mut networks = BTreeMap::new();
     for name in children(&networks_key)? {
-        let key = open(Some(&networks_key), &name)?;
+        let key = open(Some(&networks_key), &name, &transaction)?;
         let ssid = string(&key, "SSID")?.into_bytes();
         let security = required(&key, "ConnectSecurity")?;
         let security = match security.ty {
@@ -271,29 +292,77 @@ pub fn load() -> io::Result<Config> {
     }
     let mut clients = BTreeMap::new();
     for name in children(&clients_key)? {
-        let key = open(Some(&clients_key), &name)?;
+        let key = open(Some(&clients_key), &name, &transaction)?;
         let sources = strings(&key, "Addresses")?;
         let addresses = sources
             .iter()
             .map(|s| Prefix::parse(s).map_err(invalid))
             .collect::<io::Result<Vec<_>>>()?;
-        let secret = material(&string(&key, "SecretFile")?, true, 1024)?;
+        let secret_file = string(&key, "SecretFile")?;
         let allowed = strings(&key, "Networks")?;
         stamp(&mut hash, name.as_bytes());
         for source in &sources {
             stamp(&mut hash, source.as_bytes());
         }
-        stamp(&mut hash, &secret);
         for network in &allowed {
             stamp(&mut hash, network.as_bytes());
         }
         clients.insert(
             name.clone(),
+            PreparedClient {
+                addresses,
+                secret_file,
+                networks: allowed,
+            },
+        );
+    }
+    Ok(Prepared {
+        listeners,
+        limits,
+        verifications,
+        clients,
+        networks,
+        certificate_files,
+        private_key_file,
+        hash,
+    })
+}
+
+pub fn load() -> io::Result<Config> {
+    let Prepared {
+        listeners,
+        limits,
+        verifications,
+        clients: prepared_clients,
+        networks,
+        certificate_files,
+        private_key_file,
+        mut hash,
+    } = read_registry()?;
+    let mut certificates = Vec::new();
+    for path in certificate_files {
+        let bytes = material(&path, false, 65536)?;
+        stamp(&mut hash, &bytes);
+        certificates.push(rustls::pki_types::CertificateDer::from(bytes.to_vec()));
+    }
+    let key = material(&private_key_file, true, 65536)?;
+    stamp(&mut hash, &key);
+    let key = rustls::pki_types::PrivateKeyDer::try_from(key.to_vec())
+        .map_err(|_| invalid("private key is not DER"))?;
+    let tls = radius_core::server_config(certificates, key)
+        .map_err(|_| invalid("invalid certificate/key pair"))?;
+    let mut clients = BTreeMap::new();
+    for (name, client) in prepared_clients {
+        let secret = material(&client.secret_file, true, 1024)?;
+        stamp(&mut hash, name.as_bytes());
+        stamp(&mut hash, &secret);
+        clients.insert(
+            name.clone(),
             Client {
                 name,
-                addresses,
+                addresses: client.addresses,
                 secret,
-                networks: allowed,
+                networks: client.networks,
             },
         );
     }

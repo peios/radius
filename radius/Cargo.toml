@@ -1,0 +1,20 @@
+[package]
+name = "radius"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+native = ["radius-management/native", "dep:peios", "dep:libc"]
+window = ["native", "dep:gxwi", "dep:gxwi-sd-editor"]
+
+[dependencies]
+radius-management = { path = "../radius-management" }
+serde_json = "1"
+zeroize.workspace = true
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "b1290dbfa805d4ef151d3fc961a8d89d6c30c12c", optional = true }
+libc = { version = "0.2", optional = true }
+gxwi = { git = "https://github.com/peios/gxwi.git", rev = "dd54c32e6b7450726fd1e362986a623a1dd15b0f", optional = true }
+gxwi-sd-editor = { git = "https://github.com/peios/gxwi-essentials.git", rev = "5f17992fd34c3432d98cb18adf8835fb99ce552a", default-features = false, features = ["registry", "splice"], optional = true }

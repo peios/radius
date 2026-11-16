@@ -43,6 +43,19 @@ class Preservation(unittest.TestCase):
                 vm.stage(argparse.Namespace(vm=root, name="partial", source=source))
             self.assertEqual(list((root / "share/sets").iterdir()), [])
 
+    def test_partial_administration_runtime_is_not_published(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "share/sets").mkdir(parents=True)
+            source = root / "input"
+            for name in (*vm.FILES, vm.ADMIN_FILES[0]):
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(name.encode())
+            with self.assertRaisesRegex(SystemExit, "administration runtime requires"):
+                vm.stage(argparse.Namespace(vm=root, name="partial", source=source))
+            self.assertEqual(list((root / "share/sets").iterdir()), [])
+
     def test_stopping_launcher_reaps_its_child(self):
         with tempfile.TemporaryDirectory() as directory:
             pid_file = Path(directory) / "child.pid"

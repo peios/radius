@@ -1,7 +1,8 @@
 # Peios RADIUS
 
 `radius` is the Peios RADIUS repository. It contains the portable `radius-core`
-library, the native Peios `radiusd` daemon, and a separate loopback-only
+library, the native Peios `radiusd` daemon, the shared `radius-management`
+library, the CLI/GXWI `radius` program, and a separate loopback-only
 `radius-test-server` qualification fixture.
 
 The native adapter uses authd Authenticate without a local logon, reads normal
@@ -16,6 +17,21 @@ before success or key delivery. It owns bounded, short-lived conversations rathe
 Wi-Fi sessions. See the [technical reference](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/1--architecture.md).
 
 ## Build and test
+
+The administration window requires Rust 1.98.1 or later, matching Peios SDK
+headers and libraries, and libgxwi. Its canonical Cargo replacement gives the
+older GXWI clients the same Peios bindings as the daemon. With those libraries
+on the compiler and runtime search paths:
+
+```sh
+cargo +1.98.1 build -p radius --features window --locked
+cargo +1.98.1 build -p radiusd --features native --locked
+cargo +1.98.1 test --workspace --features radius/window,radiusd/native --locked
+cargo +1.98.1 clippy --workspace --all-targets --features radius/window,radiusd/native --locked -- -Dwarnings
+```
+
+Four native-policy tests are ignored on a normal host and run explicitly in
+the disposable Peios guest. The portable checks need no native libraries:
 
 ```sh
 cargo test --workspace --locked
@@ -50,6 +66,27 @@ pekit build -j 2 radiusd
 
 The raw executable paths are reported by `pekit build`. Pass the harness to the
 interoperability runner. No target builds an image, kernel or `pkgs/` package.
+
+The `radius` raw target includes the window. Portable Pekit `unit` and
+`management` targets are qualified. Native Pekit builds currently encounter
+older SDK/authd pins inside dependency libraries' own build graphs; those
+pins need aligning separately. The Cargo native builds above are qualified
+with matching raw libraries. Do not bypass a Pekit pin mismatch or select
+arbitrary library outputs.
+
+## Administration
+
+Run `radius` for status, `radius --help` for terminal commands, or
+`radius --window` for GXWI. Both interfaces use the same operations and actual
+caller permissions. Configuration edits work while the daemon is stopped;
+its local endpoint provides read-only status. See
+[Administration](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/5--administration.md)
+for setup, secrets, certificates, permissions, and activation diagnostics.
+
+Schema version 2 uses GUID-backed clients, access policies, authentication
+profiles, and server identities. The prior development layout needs explicit
+conversion before activating these binaries. No permanent migration framework
+or automatic live-deployment conversion is included.
 
 ## Current boundary
 

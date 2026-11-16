@@ -1,0 +1,372 @@
+//! Stored configuration, including incomplete records that need repairing.
+use ring::{
+    digest::{digest, SHA256},
+    rand::{SecureRandom, SystemRandom},
+};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+
+pub const ROOT: &str = "Machine\\Software\\Radius";
+pub const SCHEMA: u32 = 2;
+pub const MAX_OBJECTS: usize = 256;
+pub const MAX_VALUE_BYTES: usize = 65536;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Kind {
+    Client,
+    Policy,
+    Profile,
+    Identity,
+}
+impl Kind {
+    pub const ALL: [Self; 4] = [Self::Client, Self::Policy, Self::Profile, Self::Identity];
+    pub fn collection(self) -> &'static str {
+        match self {
+            Self::Client => "Clients",
+            Self::Policy => "AccessPolicies",
+            Self::Profile => "AuthenticationProfiles",
+            Self::Identity => "ServerIdentities",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "client" => Some(Self::Client),
+            "policy" => Some(Self::Policy),
+            "profile" => Some(Self::Profile),
+            "identity" => Some(Self::Identity),
+            _ => None,
+        }
+    }
+    pub fn fields(self) -> &'static [(&'static str, Field)] {
+        use Field::*;
+        match self {
+            Self::Client => &[
+                ("Addresses", List),
+                ("SecretFile", Text),
+                ("Policies", List),
+            ],
+            Self::Policy => &[
+                ("SSID", Text),
+                ("ConnectSecurity", Descriptor),
+                ("AuthenticationProfile", Text),
+                ("ReauthenticateSeconds", Number),
+            ],
+            Self::Profile => &[("AuthenticationMethods", List), ("ServerIdentity", Text)],
+            Self::Identity => &[("CertificateFiles", List), ("PrivateKeyFile", Text)],
+        }
+    }
+    pub fn field(self, name: &str) -> Option<Field> {
+        match name {
+            "Name" => Some(Field::Text),
+            "Enabled" if self != Self::Identity => Some(Field::Number),
+            _ => self
+                .fields()
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, t)| *t),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    Text,
+    List,
+    Number,
+    Descriptor,
+}
+
+/// Registry values are preserved even when a known field has the wrong type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "kebab-case")]
+pub enum Value {
+    Text(String),
+    List(Vec<String>),
+    Number(u32),
+    Bytes(Vec<u8>),
+    Raw { ty: u32, bytes: Vec<u8> },
+}
+pub type Values = BTreeMap<String, Value>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Record {
+    pub kind: Kind,
+    pub id: String,
+    pub values: Values,
+}
+impl Record {
+    pub fn new(kind: Kind, name: &str) -> Result<Self, String> {
+        let mut record = Self {
+            kind,
+            id: new_id()?,
+            values: BTreeMap::from([("Name".into(), Value::Text(name.into()))]),
+        };
+        if kind != Kind::Identity {
+            record.values.insert("Enabled".into(), Value::Number(1));
+        }
+        if kind == Kind::Policy {
+            record
+                .values
+                .insert("ReauthenticateSeconds".into(), Value::Number(3600));
+        }
+        Ok(record)
+    }
+    pub fn path(&self) -> String {
+        format!("{ROOT}\\{}\\{}", self.kind.collection(), self.id)
+    }
+    pub fn name(&self) -> &str {
+        self.text("Name").unwrap_or(&self.id)
+    }
+    pub fn text(&self, field: &str) -> Option<&str> {
+        match self.values.get(field) {
+            Some(Value::Text(v)) => Some(v),
+            _ => None,
+        }
+    }
+    pub fn list(&self, field: &str) -> Option<&[String]> {
+        match self.values.get(field) {
+            Some(Value::List(v)) => Some(v),
+            _ => None,
+        }
+    }
+    pub fn number(&self, field: &str) -> Option<u32> {
+        match self.values.get(field) {
+            Some(Value::Number(v)) => Some(*v),
+            _ => None,
+        }
+    }
+    pub fn enabled(&self) -> bool {
+        self.kind == Kind::Identity || self.number("Enabled") == Some(1)
+    }
+    pub fn references(&self) -> Vec<(Kind, &str)> {
+        match self.kind {
+            Kind::Client => self
+                .list("Policies")
+                .unwrap_or_default()
+                .iter()
+                .map(|id| (Kind::Policy, id.as_str()))
+                .collect(),
+            Kind::Policy => self
+                .text("AuthenticationProfile")
+                .map(|id| vec![(Kind::Profile, id)])
+                .unwrap_or_default(),
+            Kind::Profile => self
+                .text("ServerIdentity")
+                .map(|id| vec![(Kind::Identity, id)])
+                .unwrap_or_default(),
+            Kind::Identity => Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Issue {
+    pub object: String,
+    pub field: String,
+    pub message: String,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stored {
+    pub settings: Values,
+    pub objects: Vec<Record>,
+    pub issues: Vec<Issue>,
+}
+impl Stored {
+    pub fn get(&self, kind: Kind, id: &str) -> Option<&Record> {
+        self.objects.iter().find(|r| r.kind == kind && r.id == id)
+    }
+    pub fn resolve(&self, kind: Kind, selector: &str) -> Result<&Record, String> {
+        if let Some(r) = self.get(kind, selector) {
+            return Ok(r);
+        }
+        let matches: Vec<_> = self
+            .objects
+            .iter()
+            .filter(|r| r.kind == kind && r.name() == selector)
+            .collect();
+        match matches.as_slice() {
+            [r] => Ok(r),
+            [] => Err(format!("{} {selector:?} was not found", kind.collection())),
+            _ => Err(format!("{selector:?} is ambiguous; use its GUID")),
+        }
+    }
+    pub fn dependents(&self, kind: Kind, id: &str) -> Vec<&Record> {
+        self.objects
+            .iter()
+            .filter(|r| r.references().contains(&(kind, id)))
+            .collect()
+    }
+    /// Public data only: never include file contents or private-key material.
+    pub fn fingerprint(&self) -> String {
+        let bytes = serde_json::to_vec(&(self.settings.clone(), &self.objects))
+            .expect("stored model serializes");
+        digest(&SHA256, &bytes)
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+    pub fn authentication_fingerprint(&self) -> String {
+        let mut copy = self.clone();
+        for record in &mut copy.objects {
+            record.values.remove("Name");
+        }
+        copy.fingerprint()
+    }
+    pub fn validate(&self) -> Vec<Issue> {
+        let mut out = self.issues.clone();
+        let mut issue = |object: &str, field: &str, message: &str| {
+            out.push(Issue {
+                object: object.into(),
+                field: field.into(),
+                message: message.into(),
+            })
+        };
+        if self.settings.get("SchemaVersion") != Some(&Value::Number(SCHEMA)) {
+            issue("Settings", "SchemaVersion", "expected schema version 2");
+        }
+        for kind in Kind::ALL {
+            if self.objects.iter().filter(|r| r.kind == kind).count() > MAX_OBJECTS {
+                issue(kind.collection(), "", "too many objects");
+            }
+        }
+        for r in &self.objects {
+            if !valid_id(&r.id) {
+                issue(&r.id, "Id", "expected a canonical UUIDv4");
+            }
+            if !r.text("Name").is_some_and(|s| {
+                !s.trim().is_empty() && s.len() <= 256 && !s.chars().any(char::is_control)
+            }) {
+                issue(
+                    &r.id,
+                    "Name",
+                    "expected a nonempty display name of at most 256 bytes",
+                );
+            }
+            if r.kind != Kind::Identity && !matches!(r.number("Enabled"), Some(0 | 1)) {
+                issue(&r.id, "Enabled", "expected 0 or 1");
+            }
+            for (field, ty) in r.kind.fields() {
+                let valid = match (ty, r.values.get(*field)) {
+                    (Field::Text, Some(Value::Text(s))) => !s.is_empty() && !s.contains('\0'),
+                    (Field::List, Some(Value::List(v))) => {
+                        !v.is_empty()
+                            && v.len() <= 256
+                            && v.iter().all(|s| !s.is_empty() && !s.contains('\0'))
+                            && v.iter().collect::<BTreeSet<_>>().len() == v.len()
+                    }
+                    (Field::Number, Some(Value::Number(n))) => *n > 0,
+                    (Field::Descriptor, Some(Value::Text(s))) => !s.is_empty(),
+                    (Field::Descriptor, Some(Value::Bytes(b))) => {
+                        !b.is_empty() && b.len() <= MAX_VALUE_BYTES
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    issue(&r.id, field, "missing or invalid field");
+                }
+            }
+            for (kind, id) in r.references() {
+                if self.get(kind, id).is_none() {
+                    issue(
+                        &r.id,
+                        "References",
+                        &format!("missing {} {id}", kind.collection()),
+                    );
+                }
+            }
+            if r.kind == Kind::Client {
+                for address in r.list("Addresses").unwrap_or_default() {
+                    if crate::runtime::Prefix::parse(address).is_err() {
+                        issue(
+                            &r.id,
+                            "Addresses",
+                            "expected a canonical IP address or prefix",
+                        );
+                    }
+                }
+                if let Some(Value::Text(path)) = r.values.get("SecretFile") {
+                    if !absolute(path) {
+                        issue(&r.id, "SecretFile", "expected an absolute path");
+                    }
+                }
+            }
+            if r.kind == Kind::Policy && r.text("SSID").is_some_and(|s| s.len() > 32) {
+                issue(&r.id, "SSID", "SSID exceeds 32 bytes");
+            }
+            if r.kind == Kind::Profile {
+                let methods = r.list("AuthenticationMethods").unwrap_or_default();
+                if methods.len() > 2
+                    || methods
+                        .iter()
+                        .any(|m| radius_core::Method::parse(m).is_none())
+                {
+                    issue(
+                        &r.id,
+                        "AuthenticationMethods",
+                        "unsupported or duplicate authentication methods",
+                    );
+                }
+            }
+            if r.kind == Kind::Identity {
+                for path in r
+                    .list("CertificateFiles")
+                    .unwrap_or_default()
+                    .iter()
+                    .map(String::as_str)
+                    .chain(r.text("PrivateKeyFile"))
+                {
+                    if !absolute(path) {
+                        issue(&r.id, "Files", "expected absolute credential paths");
+                    }
+                }
+                if r.list("CertificateFiles").is_some_and(|v| v.len() > 16) {
+                    issue(
+                        &r.id,
+                        "CertificateFiles",
+                        "certificate chain exceeds 16 files",
+                    );
+                }
+            }
+        }
+        out
+    }
+}
+pub fn absolute(s: &str) -> bool {
+    std::path::Path::new(s).is_absolute()
+        && !std::path::Path::new(s).components().any(|p| {
+            matches!(
+                p,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+}
+pub fn valid_id(s: &str) -> bool {
+    s.len() == 36
+        && s.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+            }
+        })
+        && s.as_bytes()[14] == b'4'
+        && matches!(s.as_bytes()[19], b'8' | b'9' | b'a' | b'b')
+}
+pub fn new_id() -> Result<String, String> {
+    let mut b = [0u8; 16];
+    SystemRandom::new()
+        .fill(&mut b)
+        .map_err(|_| "random source unavailable")?;
+    b[6] = (b[6] & 15) | 64;
+    b[8] = (b[8] & 63) | 128;
+    let hex: String = b.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}

@@ -55,18 +55,31 @@ done <<< "$group_listing"
 [[ $group_sid == S-1-* ]] || { echo 'Missing fixture group SID.' >&2; exit 1; }
 root=Machine/Software/Radius
 reg new -p "$root/Settings"
-reg new -p "$root/TLS"
-reg new -p "$root/Clients/aps"
-reg new -p "$root/Networks/home"
+reg set "$root/Settings" SchemaVersion dword:2
+reg new -p "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333"
+reg set "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" Name sz:Passwords
+reg set "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" Enabled dword:1
+reg set "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" AuthenticationMethods multi:ttls-pap
+reg set "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" ServerIdentity sz:44444444-4444-4444-8444-444444444444
+reg new -p "$root/ServerIdentities/44444444-4444-4444-8444-444444444444"
+reg new -p "$root/Clients/11111111-1111-4111-8111-111111111111"
+reg new -p "$root/AccessPolicies/22222222-2222-4222-8222-222222222222"
+reg set "$root/Clients/11111111-1111-4111-8111-111111111111" Name sz:APs
+reg set "$root/Clients/11111111-1111-4111-8111-111111111111" Enabled dword:1
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" Name sz:Home
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" Enabled dword:1
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" ReauthenticateSeconds dword:3600
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" AuthenticationProfile sz:33333333-3333-4333-8333-333333333333
+reg set "$root/ServerIdentities/44444444-4444-4444-8444-444444444444" Name sz:Default
 reg set "$root/Settings" Listen multi:0.0.0.0:18120
 reg set "$root/Settings" FragmentBytes dword:128
-reg set "$root/TLS" CertificateFiles multi:/var/state/radius/secrets/server.der,/var/state/radius/secrets/intermediate.der
-reg set "$root/TLS" PrivateKeyFile sz:/var/state/radius/secrets/key.der
-reg set "$root/Clients/aps" Addresses multi:10.0.2.0/24,127.0.0.1
-reg set "$root/Clients/aps" SecretFile sz:/var/state/radius/secrets/secret
-reg set "$root/Clients/aps" Networks multi:home
-reg set "$root/Networks/home" SSID sz:Home
-reg set "$root/Networks/home" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})"
+reg set "$root/ServerIdentities/44444444-4444-4444-8444-444444444444" CertificateFiles multi:/var/state/radius/secrets/server.der,/var/state/radius/secrets/intermediate.der
+reg set "$root/ServerIdentities/44444444-4444-4444-8444-444444444444" PrivateKeyFile sz:/var/state/radius/secrets/key.der
+reg set "$root/Clients/11111111-1111-4111-8111-111111111111" Addresses multi:10.0.2.0/24,127.0.0.1
+reg set "$root/Clients/11111111-1111-4111-8111-111111111111" SecretFile sz:/var/state/radius/secrets/secret
+reg set "$root/Clients/11111111-1111-4111-8111-111111111111" Policies multi:22222222-2222-4222-8222-222222222222
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" SSID sz:Home
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})"
 # A fresh fixture image can have no port table. The required default is
 # SYSTEM-only; radiusd receives PORT_BIND only for its explicit test UDP port.
 # These self-relative SDs encode O:SYG:SYD:(A;;GA;;;SY) and the same
@@ -76,13 +89,15 @@ reg new -p "$ports"
 reg set "$ports" @ hex:010004801400000020000000000000002c00000001010000000000051200000001010000000000051200000002001c00010000000000140000000010010100000000000512000000
 reg set "$ports" udp:18120 hex:010004801400000020000000000000002c00000001010000000000051200000001010000000000051200000002004400020000000000280001000000010600000000000550000000a381926237d7018113d25f71f4aec1cd93848f340000140000000010010100000000000512000000
 # Registry administration remains SYSTEM-only; radiusd receives read rights.
-for key in "$root" "$root/Settings" "$root/TLS" "$root/Clients" "$root/Clients/aps" "$root/Networks" "$root/Networks/home"; do
+for key in "$root" "$root/Settings" "$root/ServerIdentities/44444444-4444-4444-8444-444444444444" "$root/Clients" "$root/Clients/11111111-1111-4111-8111-111111111111" "$root/AccessPolicies" "$root/AuthenticationProfiles" "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" "$root/ServerIdentities" "$root/AccessPolicies/22222222-2222-4222-8222-222222222222"; do
     reg sd "$key" --set "O:SYG:SYD:P(A;OICI;GA;;;SY)(A;OICI;GR;;;${radius_sid})"
 done
 svctl definition create radiusd --set ImagePath=/bin/bash --set Arguments=-c \
     --set "Arguments=export LD_LIBRARY_PATH=$runtime/lib; exec $daemon_dir/radiusd >/run/radiusd/output 2>&1" \
     --set Identity=Service --set RuntimeDirectories=radiusd --set Requires=lpsd --set Readiness=Notify \
     --set RequiredPrivileges=SeChangeNotifyPrivilege --set RequiredPrivileges=SeAuditPrivilege
+mkdir -p /var/state/radius/credentials
+sd set /var/state/radius/credentials "O:SYG:SYD:P(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)(A;OICI;GRGX;;;${radius_sid})"
 svctl start radiusd
 status=$(svctl status radiusd)
 [[ $status == *'radiusd: active'* ]] || { echo 'radiusd did not reach readiness' >&2; exit 1; }

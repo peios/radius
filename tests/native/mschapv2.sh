@@ -19,7 +19,7 @@ present() {
     echo "NT material did not become $expected" >&2
     exit 1
 }
-reg set "$root/Networks/home" AuthenticationMethods multi:peap-mschapv2,ttls-pap
+reg set "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" AuthenticationMethods multi:peap-mschapv2,ttls-pap
 sleep 1
 present present
 peap peap-source-password
@@ -68,11 +68,11 @@ reg set Machine/Software/Lpsd StoreNtHashes dword:1
 sleep 1
 peap peap-policy-recovered
 
-reg set "$root/Networks/home" AuthenticationMethods multi:ttls-pap
+reg set "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" AuthenticationMethods multi:ttls-pap
 sleep 1
 peap peap-method-removed dev-radius development-only-password reject
 client pap-after-peap-removal 1.2
-reg set "$root/Networks/home" AuthenticationMethods multi:peap-mschapv2,ttls-pap
+reg set "$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333" AuthenticationMethods multi:peap-mschapv2,ttls-pap
 sleep 1
 peap peap-method-restored
 echo 'NATIVE RADIUS: PEAP and NT lifecycle qualification passed'

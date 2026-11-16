@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["radius-core", "radius-fixture", "radiusd"]
+members = ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,11 @@ subtle = "2.6.1"
 [profile.dev]
 debug = 0
 incremental = false
+
+[replace]
+# GXWI clients still pin the previous bindings. Use one peios-sys link identity
+# throughout this program until those libraries advance their own pins.
+"https://github.com/peios/peios-rs.git#peios:0.4.0" = { git = "https://github.com/peios/peios-rs.git", rev = "b1290dbfa805d4ef151d3fc961a8d89d6c30c12c" }
 
 [profile.release]
 debug = 2

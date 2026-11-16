@@ -39,24 +39,38 @@ for file in server.der intermediate.der key.der secret; do
     cp "/mnt/dev/proof-credentials/$file" "/var/state/radius/secrets/$file"
 done
 root=Machine/Software/Radius
+client=$root/Clients/11111111-1111-4111-8111-111111111111
+policy=$root/AccessPolicies/22222222-2222-4222-8222-222222222222
+profile=$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333
+identity=$root/ServerIdentities/44444444-4444-4444-8444-444444444444
 reg new -p "$root/Settings"
-reg new -p "$root/TLS"
-reg new -p "$root/Clients/loopback"
-reg new -p "$root/Networks/proof"
+reg set "$root/Settings" SchemaVersion dword:2
+for key in "$client" "$policy" "$profile" "$identity"; do reg new -p "$key"; done
+reg set "$client" Name sz:Loopback
+reg set "$client" Enabled dword:1
+reg set "$policy" Name sz:Proof
+reg set "$policy" Enabled dword:1
+reg set "$policy" ReauthenticateSeconds dword:3600
+reg set "$policy" AuthenticationProfile sz:33333333-3333-4333-8333-333333333333
+reg set "$profile" Name sz:Passwords
+reg set "$profile" Enabled dword:1
+reg set "$profile" AuthenticationMethods multi:ttls-pap
+reg set "$profile" ServerIdentity sz:44444444-4444-4444-8444-444444444444
+reg set "$identity" Name sz:Default
 reg set "$root/Settings" Listen multi:127.0.0.1:18120
-reg set "$root/TLS" CertificateFiles multi:/var/state/radius/secrets/server.der,/var/state/radius/secrets/intermediate.der
-reg set "$root/TLS" PrivateKeyFile sz:/var/state/radius/secrets/key.der
-reg set "$root/Clients/loopback" Addresses multi:127.0.0.1
-reg set "$root/Clients/loopback" SecretFile sz:/var/state/radius/secrets/secret
-reg set "$root/Clients/loopback" Networks multi:proof
-reg set "$root/Networks/proof" SSID sz:OfflineProof
-reg set "$root/Networks/proof" ConnectSecurity 'sz:O:SYG:SYD:'
+reg set "$identity" CertificateFiles multi:/var/state/radius/secrets/server.der,/var/state/radius/secrets/intermediate.der
+reg set "$identity" PrivateKeyFile sz:/var/state/radius/secrets/key.der
+reg set "$client" Addresses multi:127.0.0.1
+reg set "$client" SecretFile sz:/var/state/radius/secrets/secret
+reg set "$client" Policies multi:22222222-2222-4222-8222-222222222222
+reg set "$policy" SSID sz:OfflineProof
+reg set "$policy" ConnectSecurity 'sz:O:SYG:SYD:'
 # The proof tests service readiness/restart, not network admission.
 ports=Machine/System/Network/TcpIp/PortReservations
 reg new -p "$ports"
 reg set "$ports" @ hex:010004801400000020000000000000002c00000001010000000000051200000001010000000000051200000002001c00010000000000140000000010010100000000000512000000
 reg set "$ports" udp:18120 hex:010004801400000020000000000000002c00000001010000000000051200000001010000000000051200000002004400020000000000280001000000010600000000000550000000a381926237d7018113d25f71f4aec1cd93848f340000140000000010010100000000000512000000
-for key in "$root" "$root/Settings" "$root/TLS" "$root/Clients" "$root/Clients/loopback" "$root/Networks" "$root/Networks/proof"; do
+for key in "$root" "$root/Settings" "$root/Clients" "$client" "$root/AccessPolicies" "$policy" "$root/AuthenticationProfiles" "$profile" "$root/ServerIdentities" "$identity"; do
     reg sd "$key" --set "O:SYG:SYD:P(A;OICI;GA;;;SY)(A;OICI;GR;;;${radius_sid})"
 done
 svctl definition create radiusd --set ImagePath=/bin/bash --set Arguments=-c \

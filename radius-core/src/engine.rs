@@ -245,6 +245,9 @@ impl Engine {
     /// Replace the certificate for future attempts; existing TLS conversations
     /// retain their original configuration. Apply only a fully validated config.
     pub fn update_tls(&mut self, tls: Arc<rustls::ServerConfig>) -> Result<(), Error> {
+        if Arc::ptr_eq(&self.tls, &tls) {
+            return Ok(());
+        }
         Self::new(tls.clone(), self.limits.clone())?;
         self.tls = tls;
         Ok(())

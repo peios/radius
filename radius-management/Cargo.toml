@@ -1,0 +1,26 @@
+[package]
+name = "radius-management"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+native = ["dep:peios", "dep:libc", "dep:peinit2", "dep:x509-parser"]
+
+[dependencies]
+radius-core = { path = "../radius-core" }
+ring.workspace = true
+rustls.workspace = true
+zeroize.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "b1290dbfa805d4ef151d3fc961a8d89d6c30c12c", optional = true }
+peinit2 = { git = "https://github.com/peios/peinit.git", rev = "0eb973544a96bbd1de6984198113ed5ab2bd98e7", default-features = false, optional = true }
+libc = { version = "0.2", optional = true }
+x509-parser = { version = "=0.18.1", optional = true }
+
+[[example]]
+name = "native-authority"
+required-features = ["native"]

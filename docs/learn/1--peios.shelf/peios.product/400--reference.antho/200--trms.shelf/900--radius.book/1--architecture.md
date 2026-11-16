@@ -4,7 +4,8 @@ description: Packet integrity, encrypted credential exchange, and explicit netwo
 ---
 
 The `radius` repository contains the portable RADIUS authentication core,
-the native `radiusd` daemon, and a host-side qualification fixture.
+the native `radiusd` daemon, the `radius` administration program, and a
+host-side qualification fixture.
 The native integration uses existing Peios services and kernel APIs;
 packaging and real AP qualification are separate milestones.
 
@@ -88,8 +89,9 @@ PEAP are not implemented in this slice.
 
 Each network has an ordered allowed-method list. Negotiation can select
 an allowed, untried alternative before TLS begins; a credential failure
-does not cause method fallback. Existing networks default to TTLS/PAP
-only. EAP-TLS and method-specific admission rules remain future work.
+does not cause method fallback. Named authentication profiles explicitly
+choose the allowed methods and their order. EAP-TLS and method-specific
+admission rules remain future work.
 
 Full authentication is required each time. Session storage, ticket
 resumption, and early data are disabled. Ordinary TLS server defaults

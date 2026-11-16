@@ -148,6 +148,10 @@ impl<B: Backend> Driver<B> {
         let Some(client) = self.config.client(peer.ip()) else {
             return output.discarded();
         };
+        // A disabled, most-specific client must not fall back to a wider range.
+        if !client.enabled {
+            return output.discarded();
+        }
         // Verify integrity before interpreting any AP-supplied network name.
         let Ok(request) = radius_core::wire::Request::parse(bytes, &client.secret) else {
             return output.discarded();
@@ -185,6 +189,14 @@ impl<B: Backend> Driver<B> {
             };
             network
         };
+        if !selected.1.enabled {
+            return output.discarded();
+        }
+        if let Some(tls) = &selected.1.tls {
+            if self.engine.update_tls(tls.clone()).is_err() {
+                return output.discarded();
+            }
+        }
         let binding = self.config.binding(client, selected.0, peer.ip());
         let policy = u64::from_be_bytes(self.config.fingerprint[..8].try_into().unwrap());
         let context = Client {

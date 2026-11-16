@@ -108,50 +108,88 @@ Maximum simultaneous asynchronous authd credential verifications.
 At capacity a newly verification-ready attempt fails without keys. There is
 no unbounded queue. Lowering the limit does not restart existing work.
 
---- machine\software\radius\tls
-canonical: Machine\Software\Radius\TLS
+--- machine\software\radius\settings schemaversion
+canonical: Machine\Software\Radius\Settings SchemaVersion
+type: REG_DWORD
+default: (required)
+valid: 2
+applies: live
 
-Server credentials for EAP-TTLS; individual client certificates are not required.
+Configuration schema version. Older layouts require explicit conversion.
 
-Provision immutable, administrator-owned, protected regular files. Referenced
-files must be singly linked and are opened without following a final symlink.
-Only SYSTEM or Administrators may modify credentials. radiusd can read them.
-Use a protected parent directory as well. Public certificates can grant other
-principals read/execute access; private keys and AP secrets cannot.
+Objects use canonical lowercase UUIDv4 key names. Display names are separate,
+may change, and need not be unique. At most 256 objects of each kind are accepted.
+An empty object collection is valid and grants no access through that collection.
 
---- machine\software\radius\tls certificatefiles
-canonical: Machine\Software\Radius\TLS CertificateFiles
+--- machine\software\radius\settings statussecurity
+canonical: Machine\Software\Radius\Settings StatusSecurity
+type: REG_SZ or REG_BINARY
+default: SYSTEM and Administrators may query
+valid: SDDL or binary security descriptor with an owner
+applies: live (next local status request)
+
+Descriptor for the local status query right, mask 0x1.
+
+Generic read and all map to Query; generic write and execute map to zero.
+The kernel-attested peer token is checked; Unix IDs do not authorize requests.
+Unreadable or malformed explicit descriptors deny queries. This object grants
+no Registry write authority or service-control rights.
+
+--- machine\software\radius\serveridentities\<identity>
+canonical: Machine\Software\Radius\ServerIdentities\<identity>
+
+A named certificate chain and matching private key.
+
+--- machine\software\radius\serveridentities\<identity> name
+canonical: Machine\Software\Radius\ServerIdentities\<identity> Name
+type: REG_SZ
+default: (required)
+valid: nonempty display name, at most 256 bytes; no control characters
+applies: live
+
+Friendly display label. References use the immutable GUID, not this name.
+
+--- machine\software\radius\serveridentities\<identity> certificatefiles
+canonical: Machine\Software\Radius\ServerIdentities\<identity> CertificateFiles
 type: REG_MULTI_SZ
 default: (required)
-valid: 1–16 absolute paths to DER certificates, each at most 65536 bytes
-applies: live (new exchanges)
+valid: 1–16 absolute DER certificate paths, each at most 65536 bytes
+applies: live
 
 Ordered certificate chain, starting with the server certificate.
 
-Clients must trust its CA and validate the expected server name. A certificate
-renewal changes new TLS exchanges while bounded existing exchanges complete.
-
---- machine\software\radius\tls privatekeyfile
-canonical: Machine\Software\Radius\TLS PrivateKeyFile
+--- machine\software\radius\serveridentities\<identity> privatekeyfile
+canonical: Machine\Software\Radius\ServerIdentities\<identity> PrivateKeyFile
 type: REG_SZ
 default: (required)
 valid: absolute path to an unencrypted DER private key, at most 65536 bytes
-applies: live (new exchanges)
+applies: live
 
-Protected private key matching the first certificate.
-
-Write new protected files first, then transactionally switch references. Keep
-old files until their references and any bounded readers have been released.
+Private key matching the leaf certificate. Management import accepts PEM or
+DER and stores protected DER files.
 
 --- machine\software\radius\clients\<client>
 canonical: Machine\Software\Radius\Clients\<client>
 
-A trusted RADIUS client definition, selected by the actual UDP source address.
+A trusted RADIUS client selected by the actual UDP source address.
 
-Record identifiers contain 1–64 lowercase ASCII letters, digits, or hyphens.
-At most 256 client definitions are accepted. The most-specific source prefix
-wins. Equal duplicate prefixes are invalid. A bad secret never falls back to
-a less-specific client. NAS attributes cannot select a trusted definition.
+--- machine\software\radius\clients\<client> name
+canonical: Machine\Software\Radius\Clients\<client> Name
+type: REG_SZ
+default: (required)
+valid: nonempty display name, at most 256 bytes; no control characters
+applies: live
+
+Friendly display label. References use the immutable GUID, not this name.
+
+--- machine\software\radius\clients\<client> enabled
+canonical: Machine\Software\Radius\Clients\<client> Enabled
+type: REG_DWORD
+default: (required)
+valid: 0 or 1
+applies: live
+
+A disabled client denies affected requests without a broader-prefix fallback.
 
 --- machine\software\radius\clients\<client> addresses
 canonical: Machine\Software\Radius\Clients\<client> Addresses
@@ -160,103 +198,151 @@ default: (required)
 valid: 1–256 canonical literal IPv4/IPv6 addresses or CIDR prefixes
 applies: live
 
-Actual packet sources permitted to use this client's secret.
-
-Prefixes with host bits and mapped IPv6 addresses are invalid. Trust edits
-cancel affected pending exchanges and cached replies.
+Most-specific prefixes select a client. Disabled clients and wrong secrets
+have no fallback to less-specific clients. Equal prefixes are invalid.
 
 --- machine\software\radius\clients\<client> secretfile
 canonical: Machine\Software\Radius\Clients\<client> SecretFile
 type: REG_SZ
 default: (required)
-valid: absolute path to a protected regular file containing 16–1024 secret bytes
+valid: absolute path to a protected regular file containing 16–1024 bytes
 applies: live
 
-AP shared secret, read as exact bytes without trimming or newline removal.
+The management program generates 48-character secrets by default. Explicit
+reveal requires file-read authority. Ordinary output omits secret contents.
 
-Rotating it invalidates affected pending exchanges and cached replies. The
-Registry contains the file reference rather than the shared secret itself.
-
---- machine\software\radius\clients\<client> networks
-canonical: Machine\Software\Radius\Clients\<client> Networks
+--- machine\software\radius\clients\<client> policies
+canonical: Machine\Software\Radius\Clients\<client> Policies
 type: REG_MULTI_SZ
 default: (required)
-valid: 1–256 existing network record identifiers with distinct SSIDs
+valid: 1–256 existing access-policy GUIDs with distinct SSIDs
 applies: live
 
-Networks this client may serve.
+The integrity-checked Called-Station-Id must identify an exact allowed SSID.
+NAS attributes cannot select a trusted client.
 
-An initial request must carry an integrity-protected Called-Station-Id with a
-valid MAC prefix and exact SSID. Missing, malformed, or unmapped names have no
-fallback, even when only one network is allowed. A continuation keeps its
-original binding; a supplied SSID must still match it.
+--- machine\software\radius\accesspolicies\<policy>
+canonical: Machine\Software\Radius\AccessPolicies\<policy>
 
---- machine\software\radius\networks\<network>
-canonical: Machine\Software\Radius\Networks\<network>
+Admission policy, independently of credential verification in authd.
 
-A network admission policy, independent of identity verification in authd.
+--- machine\software\radius\accesspolicies\<policy> name
+canonical: Machine\Software\Radius\AccessPolicies\<policy> Name
+type: REG_SZ
+default: (required)
+valid: nonempty display name, at most 256 bytes; no control characters
+applies: live
 
-At most 256 networks are accepted. Record names follow the client-name rules.
+Friendly display label. References use the immutable GUID, not this name.
 
---- machine\software\radius\networks\<network> ssid
-canonical: Machine\Software\Radius\Networks\<network> SSID
+--- machine\software\radius\accesspolicies\<policy> enabled
+canonical: Machine\Software\Radius\AccessPolicies\<policy> Enabled
+type: REG_DWORD
+default: (required)
+valid: 0 or 1
+applies: live
+
+A disabled policy denies new admissions for its SSID.
+
+--- machine\software\radius\accesspolicies\<policy> ssid
+canonical: Machine\Software\Radius\AccessPolicies\<policy> SSID
 type: REG_SZ
 default: (required)
 valid: nonempty UTF-8 text, at most 32 bytes
 applies: live
 
-Exact, case-sensitive SSID advertised by the AP.
+Changing the SSID invalidates conversations bound to its previous value.
+Display-name changes preserve identity.
 
-Renaming an SSID invalidates conversations bound to the previous name.
-
---- machine\software\radius\networks\<network> connectsecurity
-canonical: Machine\Software\Radius\Networks\<network> ConnectSecurity
+--- machine\software\radius\accesspolicies\<policy> connectsecurity
+canonical: Machine\Software\Radius\AccessPolicies\<policy> ConnectSecurity
 type: REG_SZ or REG_BINARY
 default: (required)
-valid: SDDL or a validated self-relative security descriptor, at most 65536 bytes
-applies: live (at final admission)
+valid: SDDL or validated self-relative SD with owner, at most 65536 bytes
+applies: live
 
-Ordinary security descriptor for the network's Connect right, mask 0x1.
+The verified subject is checked for Connect, mask 0x1. Missing subject context
+cannot grant admission. The kernel query creates no token or impersonation
+authority. This descriptor is separate from Registry management permissions.
 
-Generic read, execute, and all map to Connect; generic write maps to zero.
-Supply an owner. An absent DACL deliberately grants access; an empty DACL
-denies it. Missing identity context, unsupported execution context, and
-detected access-check or audit preparation errors fail closed. Matching SACL
-audit ACEs follow the kernel query's caller privilege gate. The stateless
-kernel checker creates no token and cannot impersonate the user. Source groups
-are used as returned by authd, without inventing local-session or built-in
-memberships.
+--- machine\software\radius\accesspolicies\<policy> authenticationprofile
+canonical: Machine\Software\Radius\AccessPolicies\<policy> AuthenticationProfile
+type: REG_SZ
+default: (required)
+valid: existing authentication-profile GUID
+applies: live
 
---- machine\software\radius\networks\<network> authenticationmethods
-canonical: Machine\Software\Radius\Networks\<network> AuthenticationMethods
-type: REG_MULTI_SZ
-default: ttls-pap
-valid: 1–2 unique entries from ttls-pap, peap-mschapv2
-applies: live (method-list edits invalidate unfinished exchanges and cached replies)
+Reference to reusable methods and server identity. Each policy retains its
+own Connect descriptor.
 
-Ordered authentication methods permitted on the network.
-
-The first method is proposed initially. Remaining methods are alternatives
-during negotiation, without cycling back through rejected methods or
-automatically switching after failed authentication. Every method uses
-the same ConnectSecurity descriptor. Absence preserves TTLS/PAP-only
-behavior; an empty, duplicate or unknown list makes configuration invalid.
-
-`peap-mschapv2` uses PEAPv0 with TLS 1.2 and EAP-MSCHAPv2 inside. The
-credential source must permit password authentication and have compatible
-NT material. Source storage policy does not enable a network method.
-`ttls-pap` retains its TLS 1.2 and TLS 1.3 support. EAP-TLS is not yet an
-implemented method and is rejected as an unknown entry.
-
---- machine\software\radius\networks\<network> reauthenticateseconds
-canonical: Machine\Software\Radius\Networks\<network> ReauthenticateSeconds
+--- machine\software\radius\accesspolicies\<policy> reauthenticateseconds
+canonical: Machine\Software\Radius\AccessPolicies\<policy> ReauthenticateSeconds
 type: REG_DWORD
-default: 3600
+default: (required)
 valid: 1–4294967295
-applies: live (next successful admission)
+applies: live
 
-Requested AP reauthentication interval, in seconds.
+Successful admissions request periodic reauthentication using Session-Timeout
+and Termination-Action. Existing access is not immediately disconnected;
+actual client enforcement must be qualified. Management defaults to 3600.
 
-Access-Accept carries signed Session-Timeout and Termination-Action equal to
-RADIUS-Request. This requests future authentication; it does not disconnect an
-existing station immediately. Actual AP/client enforcement needs qualification.
+--- machine\software\radius\authenticationprofiles\<profile>
+canonical: Machine\Software\Radius\AuthenticationProfiles\<profile>
+
+Reusable method settings, separate from admission permissions.
+
+--- machine\software\radius\authenticationprofiles\<profile> name
+canonical: Machine\Software\Radius\AuthenticationProfiles\<profile> Name
+type: REG_SZ
+default: (required)
+valid: nonempty display name, at most 256 bytes; no control characters
+applies: live
+
+Friendly display label. References use the immutable GUID, not this name.
+
+--- machine\software\radius\authenticationprofiles\<profile> enabled
+canonical: Machine\Software\Radius\AuthenticationProfiles\<profile> Enabled
+type: REG_DWORD
+default: (required)
+valid: 0 or 1
+applies: live
+
+A disabled shared profile disables admission through its referring policies.
+
+--- machine\software\radius\authenticationprofiles\<profile> authenticationmethods
+canonical: Machine\Software\Radius\AuthenticationProfiles\<profile> AuthenticationMethods
+type: REG_MULTI_SZ
+default: (required)
+valid: 1–2 unique entries from ttls-pap, peap-mschapv2
+applies: live
+
+Ordered allowed methods; the first is preferred. PEAP/MSCHAPv2 requires authd
+credential support and uses TLS 1.2. radiusd receives no reusable NT hash.
+TTLS/PAP supports TLS 1.2 and TLS 1.3. EAP-TLS remains future work.
+
+--- machine\software\radius\authenticationprofiles\<profile> serveridentity
+canonical: Machine\Software\Radius\AuthenticationProfiles\<profile> ServerIdentity
+type: REG_SZ
+default: (required)
+valid: existing server-identity GUID
+applies: live
+
+Reference to the certificate chain and matching private key used for TLS
+authentication through this profile.
+
+Referenced credential files must be singly linked regular files, owned by SYSTEM
+or Administrators, and protected against modification by other principals.
+The service may read them. Private keys and shared secrets may grant read access
+only to SYSTEM, Administrators, and radiusd. Public certificates may be readable
+by others. Files are opened without following a final symlink.
+
+Prepare protected files before transactionally publishing references. Failed
+management saves remove their newly staged files. Successful replacements retain
+previous files until they can safely be removed. Certificate replacement cancels
+affected unfinished conversations and cached replies.
+
+Missing references, malformed values, and unreadable credentials invalidate the
+complete candidate. radiusd pauses admission rather than keeping old policy
+active, while its local status endpoint remains available for diagnosis and
+repair. Intentionally disabled, otherwise valid objects do not invalidate
+unrelated policy. Direct Registry edits can bypass management deletion checks.

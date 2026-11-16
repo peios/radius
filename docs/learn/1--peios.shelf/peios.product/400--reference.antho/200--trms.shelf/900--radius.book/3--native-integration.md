@@ -41,10 +41,13 @@ value replaces the default and is never silently broadened.
 The component's `radiusd.regman` describes every value under
 `Machine\Software\Radius`. Settings define literal UDP listeners and
 bounded conversation resources. Clients define source-address prefixes,
-protected secret-file references, and allowed network records. Networks
-define exact SSIDs, Connect security descriptors, and requested periodic
-reauthentication. TLS references an ordered DER certificate chain and
-matching protected DER private key.
+protected secret-file references, and allowed access-policy GUIDs. Access
+policies define exact SSIDs, Connect security descriptors, periodic
+reauthentication, and an authentication-profile reference. Profiles select
+ordered methods and a named server identity. Server identities reference an
+ordered DER certificate chain and matching protected DER private key.
+All records have stable GUID keys and independent display names. Schema
+version 2 requires explicit conversion from the earlier development layout.
 
 Most-specific source prefixes select the trusted client. There is no
 fallback to another secret. The integrity-checked Called-Station-Id must
@@ -53,11 +56,17 @@ addresses do not establish user identity. Continuations retain their
 original client, source, and network binding. A changed secret, source
 trust definition, SSID, or listener set invalidates affected work.
 
-Each network's `AuthenticationMethods` is an ordered allowed-method
-list. Absence selects only `ttls-pap`; an explicit list can include
-`peap-mschapv2`. All methods share the network's Connect descriptor.
-Changing a method list invalidates that network's unfinished exchanges
-and cached replies. Enabling NT storage does not change network methods.
+Each profile's required `AuthenticationMethods` is an ordered allowed-method
+list containing `ttls-pap`, `peap-mschapv2`, or both. All methods share the
+access policy's Connect descriptor. Changing a method list invalidates
+affected unfinished exchanges and cached replies. Enabling NT storage does
+not change the configured methods.
+
+An intentionally disabled client, policy, or profile denies affected
+admissions without falling back to other clients or profiles. Otherwise
+valid disabled records do not invalidate unrelated policy. These changes do
+not disconnect established stations immediately. Missing references remain
+invalid even on disabled records.
 
 One nonblocking authd operation belongs to each credential attempt. PAP
 uses one typed Password prompt and requires confirmed Password verification.
@@ -104,8 +113,17 @@ The packet loop continues processing bounded handshakes and expiry.
 Observed pending, invalid, unreadable, or unwatched configuration pauses
 new admissions and cached success replies. Pending verification results
 can wait only within their original deadlines. Recovery validates the
-assembled configuration before resuming. Certificate-only renewal
-changes new TLS exchanges while existing bounded exchanges continue.
+assembled configuration before resuming. Certificate replacement cancels
+affected unfinished exchanges and cached replies. Cosmetic name changes
+preserve authentication bindings.
+
+Notify readiness means the local status endpoint is ready. An invalid
+initial configuration leaves that endpoint available for diagnosis and
+repair while authentication is paused. It does not imply active listeners.
+The administration program shows saved and effective configuration
+separately; it also distinguishes a stopped service from an unreachable or
+unauthorized status endpoint. See
+[Administration](~peios/reference/radius/administration).
 
 The loader copies Registry configuration through one short read-only
 transaction, including key resolution, enumeration, values, and layer
@@ -159,6 +177,8 @@ export PEIOS_DISPOSABLE_RADIUS_TEST=yes
 bash /mnt/dev/native/setup.sh
 bash /mnt/dev/native/qualify.sh
 bash /mnt/dev/native/mschapv2.sh
+bash /mnt/dev/native/administration.sh
+bash /mnt/dev/native/initialize.sh
 ```
 
 The independent supplicant runs inside the guest against loopback UDP.
@@ -170,6 +190,16 @@ invalid-configuration recovery, secret rotation, and source failure.
 They capture supplicant output privately because it can contain keys.
 The MSCHAPv2 sequence also checks method negotiation, both NT controls,
 opportunistic backfilling, password changes, and password eligibility.
+Administration qualification additionally requires `bin/radius`, matching
+`libgxwi.so.1`, and the native-authority example in the development share.
+It checks shared profiles, references, renames, disabled isolation, invalid
+startup recovery, credential staging, stopped-daemon edits, and real-token
+status, Registry, and secret-file authorization. Certificate import checks
+also need the corresponding PEM chain and private key in the fixture share.
+The initialization script temporarily replaces and restores the disposable
+fixture's Registry subtree and credential directory. It verifies fresh setup,
+existing-configuration refusal, and enabled-administrator writes without
+granting the test token extra privileges.
 Set `RADIUS_DEV_RUNTIME=1` when using the replaceable raw-binary layout
 at `/lcl/radius-dev/current` rather than copying binaries into `/lcl`.
 

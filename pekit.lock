@@ -4,7 +4,7 @@
       "prefix": "github.com/gcslib/rust",
       "git": "https://github.com/gcslib/rust",
       "dir": "",
-      "rev": "6d2dbb1a663f5143ac1beb378b7613b680b07ccc"
+      "rev": "08732a35010b83be3bd4b97a932d13ec5b7b39cb"
     },
     {
       "prefix": "github.com/gcslib/buildenv",
@@ -47,6 +47,12 @@
       "git": "https://github.com/gcslib/clang",
       "dir": "",
       "rev": "HEAD"
+    },
+    {
+      "prefix": "github.com/peios/gxwi",
+      "git": "https://github.com/peios/gxwi",
+      "dir": "",
+      "rev": "dd54c32e6b7450726fd1e362986a623a1dd15b0f"
     }
   ],
   "libraries": [
@@ -82,8 +88,8 @@
       "path": "github.com/gcslib/rust",
       "git": "https://github.com/gcslib/rust",
       "dir": "",
-      "commit": "6d2dbb1a663f5143ac1beb378b7613b680b07ccc",
-      "tree": "8dd951231efa5dce4b67b82b18faaa2dfeb5468aeea0570cb4557f958ada845c"
+      "commit": "08732a35010b83be3bd4b97a932d13ec5b7b39cb",
+      "tree": "6a65b76477327b07374c88242b8a695eeb5016827cf3079003b2dcd282ee1d14"
     },
     {
       "path": "github.com/peios/authd",
@@ -91,6 +97,13 @@
       "dir": "",
       "commit": "5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652",
       "tree": "eda8959ef7a91498b28c711db05bb48b58d0149b17352bce5443081f69b9dc17"
+    },
+    {
+      "path": "github.com/peios/gxwi",
+      "git": "https://github.com/peios/gxwi",
+      "dir": "",
+      "commit": "dd54c32e6b7450726fd1e362986a623a1dd15b0f",
+      "tree": "6d23683793662962d14025bbde47bc74834ef895e2e5cbf95d6eb0a7051d9a67"
     },
     {
       "path": "github.com/peios/peios-rs",

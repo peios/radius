@@ -21,6 +21,7 @@ FILES = (
     "bin/radiusd", "lib/libpeios.so.0", "lib/libauth.so.1",
 )
 NETWORK_FILES = ("bin/netd", "bin/net", "lib/libnetd.so.1")
+ADMIN_FILES = ("bin/radius", "lib/libgxwi.so.1")
 HERE = Path(__file__).resolve().parent
 
 
@@ -183,7 +184,10 @@ def stage(args):
     network = [file for file in NETWORK_FILES if (source / file).is_file()]
     if network and len(network) != len(NETWORK_FILES):
         raise SystemExit("network runtime requires netd, net, and libnetd together")
-    files = (*FILES, *network)
+    administration = [file for file in ADMIN_FILES if (source / file).is_file()]
+    if administration and len(administration) != len(ADMIN_FILES):
+        raise SystemExit("administration runtime requires radius and libgxwi together")
+    files = (*FILES, *network, *administration)
     for relative in files:
         if not (source / relative).is_file():
             raise SystemExit(f"missing runtime file: {relative}")

@@ -1,21 +1,56 @@
+import fs
 import "github.com/gcslib/rust"
 import "github.com/gcslib/clang"
+import "github.com/peios/gxwi"
 import "github.com/peios/peios-rs" as peios_rs
 import build libauth from "github.com/peios/authd"
 
 def crates() -> rust.RustWorkspace {
-    = rust.workspace(dir("."), rust.vendored(file("Cargo.lock")))
+    = rust.workspace(dir("."), dependencies())
+}
+
+# Cargo's replaced packages are resolution records, not compiled inputs. The
+# current Rust library vendors every lock entry, including replacements. Supply
+# its input list without those records; Cargo still resolves the original lock
+# and manifest, frozen and offline. Remove this adapter when the helper handles
+# Cargo replacements itself or the GUI dependencies advance their bindings.
+#[hermetic]
+fn materialized_lock(lock: File) -> File {
+    let blocks = lock.read().split("[[package]]")
+    let mut contents = "version = 4\n"
+    let mut first = true
+    for block in blocks {
+        if first { first := false; continue }
+        let mut replaced = false
+        for line in block.lines() {
+            if line.starts_with("replace = ") { replaced := true }
+        }
+        if not replaced { contents := "{contents}[[package]]{block}" }
+    }
+    let at = "{working_dir().path}/Cargo.lock"
+    let written = fs.write(at, contents)
+    = file(at)
+}
+
+def dependencies() -> rust.Vendored {
+    let lock = file("Cargo.lock")
+    let materialized = rust.vendored(materialized_lock(lock))
+    # Cargo still needs source replacement entries to resolve the old identity
+    # offline, although its code is provided only by the replacement package.
+    = {crates = materialized.crates; git = rust.git_crates(lock); locals = materialized.locals}
 }
 
 def build test_server() { = rust.bin(crates(), "radius-fixture", name = "radius-test-server") }
 
-def native_crates() -> rust.RustWorkspace {
+def native_crates(window: Bool = false) -> rust.RustWorkspace {
+    let gui: List<rust.CrateSettings> = if window { gxwi.crate_settings() } else { [] }
     = rust.workspace(
-        dir("."), rust.vendored(file("Cargo.lock")),
+        dir("."), dependencies(),
         crates = [
             ...peios_rs.crate_settings(),
+            ...gui,
             {
-                package = "radiusd"
+                package = "radius-management"
                 env = [{key = "LIBRARY_PATH"; value = "/opt/peios/lib"}]
                 given = [
                     {at = "/opt/peios/lib/libauth.so"; place = build libauth()},
@@ -28,3 +63,6 @@ def native_crates() -> rust.RustWorkspace {
 }
 
 def build radiusd() { = rust.bin(native_crates(), "radiusd", features = ["native"]) }
+
+# The same program provides terminal administration and the GXWI window.
+def build radius() { = rust.bin(native_crates(window = true), "radius", features = ["window"]) }

@@ -45,6 +45,9 @@ fn check(subject: &Authenticated, text: &str) -> Result<(), Reason> {
         subject,
         "qualification",
         &Network {
+            enabled: true,
+            tls: None,
+            tls_tag: [0; 32],
             methods: vec![radius_core::Method::TtlsPap],
             ssid: b"Qualification".to_vec(),
             security: sddl::parse(&format!("O:SYG:SY{text}"))

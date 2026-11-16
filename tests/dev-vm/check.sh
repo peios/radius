@@ -14,7 +14,7 @@ snapshot() {
     lps show radius-dev-proof
     lps group list
     reg get Machine/Software/RadiusDevProof Marker
-    reg get Machine/Software/Radius/Networks/proof ConnectSecurity
+    reg get Machine/Software/Radius/AccessPolicies/22222222-2222-4222-8222-222222222222 ConnectSecurity
     sha256sum /var/state/lpsd/principals /var/state/radius/secrets/*
 }
 case ${1:-} in

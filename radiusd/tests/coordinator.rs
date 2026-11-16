@@ -120,6 +120,7 @@ fn setup_peers() -> (Setup, ClientConnection) {
     let tls_client =
         ClientConnection::new(client, ServerName::try_from("radius.test").unwrap()).unwrap();
     let config = Config {
+        saved_fingerprint: String::new(),
         listeners: vec!["127.0.0.1:1812".parse().unwrap()],
         limits: Limits {
             frame_payload: 128,
@@ -130,6 +131,7 @@ fn setup_peers() -> (Setup, ClientConnection) {
             "aps".into(),
             Client {
                 name: "aps".into(),
+                enabled: true,
                 addresses: vec![Prefix::parse("127.0.0.0/8").unwrap()],
                 secret: Zeroizing::new(SECRET.to_vec()),
                 networks: vec!["home".into()],
@@ -138,6 +140,9 @@ fn setup_peers() -> (Setup, ClientConnection) {
         networks: BTreeMap::from([(
             "home".into(),
             Network {
+                enabled: true,
+                tls: None,
+                tls_tag: [0; 32],
                 methods: vec![radius_core::Method::TtlsPap],
                 ssid: b"Home".to_vec(),
                 security: vec![1],
@@ -502,6 +507,7 @@ fn most_specific_client_wins_and_bad_secret_has_no_fallback() {
         "one".into(),
         Client {
             name: "one".into(),
+            enabled: true,
             addresses: vec![Prefix::parse("127.0.0.1").unwrap()],
             secret: Zeroizing::new(b"other-secret-at-least-16".to_vec()),
             networks: vec!["home".into()],
@@ -526,6 +532,7 @@ fn conflicting_client_prefix_or_network_ssid_is_rejected() {
         "other".into(),
         Client {
             name: "other".into(),
+            enabled: true,
             addresses: vec![Prefix::parse("127.0.0.0/8").unwrap()],
             secret: Zeroizing::new(SECRET.to_vec()),
             networks: vec!["home".into()],
@@ -536,6 +543,9 @@ fn conflicting_client_prefix_or_network_ssid_is_rejected() {
     config.networks.insert(
         "alias".into(),
         Network {
+            enabled: true,
+            tls: None,
+            tls_tag: [0; 32],
             methods: vec![radius_core::Method::TtlsPap],
             ssid: b"Home".to_vec(),
             security: vec![1],
@@ -549,4 +559,114 @@ fn conflicting_client_prefix_or_network_ssid_is_rejected() {
         .networks
         .push("alias".into());
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn disabled_specific_client_cannot_fall_back_to_an_enabled_prefix() {
+    let (mut config, _, backend, calls, _, _) = setup();
+    config.clients.insert(
+        "disabled".into(),
+        Client {
+            name: "disabled".into(),
+            enabled: false,
+            addresses: vec![Prefix::parse("127.0.0.1").unwrap()],
+            secret: Zeroizing::new(Vec::new()),
+            networks: vec!["home".into()],
+        },
+    );
+    let mut d = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out::default();
+    d.receive(
+        Instant::now(),
+        0,
+        peer(),
+        &request(1, 0, None, 1, b"anonymous", Some(b"aa-bb-cc-dd-ee-ff:Home")),
+        &mut out,
+    );
+    assert!(out.replies.is_empty());
+    assert_eq!(calls.get(), 0);
+    assert_eq!(d.pending(), 0);
+}
+
+#[test]
+fn a_disabled_policy_denies_its_requests_without_invalidating_configuration() {
+    let (mut config, _, backend, calls, _, _) = setup();
+    config.networks.get_mut("home").unwrap().enabled = false;
+    assert!(config.validate().is_ok());
+    let mut d = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out::default();
+    d.receive(
+        Instant::now(),
+        0,
+        peer(),
+        &request(1, 0, None, 1, b"anonymous", Some(b"aa-bb-cc-dd-ee-ff:Home")),
+        &mut out,
+    );
+    assert!(out.replies.is_empty());
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn disabling_an_object_cancels_pending_work_and_cannot_admit_late_results() {
+    for client in [true, false] {
+        let (config, tls, backend, _, ready, drops) = setup();
+        ready.set(false);
+        let mut d = Driver::new(Arc::new(config), backend).unwrap();
+        let mut out = Out {
+            deliver: true,
+            ..Default::default()
+        };
+        let now = Instant::now();
+        pending(&mut d, tls, &mut out, now);
+        let mut next = setup().0;
+        if client {
+            next.clients.get_mut("aps").unwrap().enabled = false;
+        } else {
+            next.networks.get_mut("home").unwrap().enabled = false;
+        }
+        d.activate(Arc::new(next)).unwrap();
+        ready.set(true);
+        d.tick(now, &mut out);
+        assert!(out.replies.is_empty());
+        assert_eq!(drops.get(), 1);
+        assert_eq!(out.events[0].0, Reason::Binding);
+    }
+}
+
+#[test]
+fn the_selected_policy_uses_its_own_server_certificate() {
+    let (mut config, _, backend, calls, _, _) = setup();
+    let (other, tls, _, _, _, _) = setup();
+    config.networks.get_mut("home").unwrap().tls = Some(other.tls.clone());
+    let mut d = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out {
+        deliver: true,
+        ..Default::default()
+    };
+    let now = Instant::now();
+    pending(&mut d, tls, &mut out, now);
+    d.tick(now, &mut out);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(out.replies.pop_front().unwrap()[0], 2);
+}
+
+#[test]
+fn changing_server_identity_cancels_an_in_progress_conversation() {
+    let (config, tls, backend, _, ready, drops) = setup();
+    ready.set(false);
+    let mut d = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out {
+        deliver: true,
+        ..Default::default()
+    };
+    let now = Instant::now();
+    pending(&mut d, tls, &mut out, now);
+    let mut next = setup().0;
+    next.networks.get_mut("home").unwrap().tls_tag = [7; 32];
+    d.activate(Arc::new(next)).unwrap();
+    ready.set(true);
+    d.tick(now, &mut out);
+    assert_eq!(drops.get(), 1);
+    assert!(out.replies.is_empty());
+    assert_eq!(out.events[0].0, Reason::Binding);
 }

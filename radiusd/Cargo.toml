@@ -7,10 +7,11 @@ publish.workspace = true
 
 [features]
 default = []
-native = ["dep:peios", "dep:peios-auth", "dep:libc", "dep:socket2"]
+native = ["dep:peios", "dep:peios-auth", "dep:libc", "dep:socket2", "radius-management/native"]
 
 [dependencies]
 radius-core = { path = "../radius-core" }
+radius-management = { path = "../radius-management" }
 ring.workspace = true
 rustls.workspace = true
 zeroize.workspace = true

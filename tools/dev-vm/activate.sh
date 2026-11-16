@@ -26,6 +26,10 @@ fi
 # Resolve dependencies before stopping any running service. Build/source ABI
 # compatibility remains the caller's responsibility; checksums are not an ABI test.
 programs=(peinit2 svctl authd lpsd lps radiusd)
+if [[ -e $runtime/sets/$selected/bin/radius || -e $runtime/sets/$selected/lib/libgxwi.so.1 ]]; then
+    [[ -f $runtime/sets/$selected/bin/radius && -f $runtime/sets/$selected/lib/libgxwi.so.1 ]]
+    programs+=(radius)
+fi
 if [[ -e $runtime/sets/$selected/bin/netd || -e $runtime/sets/$selected/bin/net || -e $runtime/sets/$selected/lib/libnetd.so.1 ]]; then
     [[ -f $runtime/sets/$selected/bin/netd && -f $runtime/sets/$selected/bin/net && -f $runtime/sets/$selected/lib/libnetd.so.1 ]]
     programs+=(netd net)

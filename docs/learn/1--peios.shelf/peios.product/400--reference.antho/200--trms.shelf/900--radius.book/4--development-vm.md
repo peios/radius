@@ -62,6 +62,12 @@ reported outputs into a directory with these entries:
 | `lib/libauth.so.1` | authd: `libauth` |
 | `lib/libpeios.so.0` | peios-sdk: `libpeios` |
 
+Administration development adds `bin/radius` and `lib/libgxwi.so.1`, built
+from the RADIUS `radius` target and GXWI `libgxwi` target. Stage both
+together;
+partial administration sets are rejected before publication. The window
+also needs a running GXWI desktop; the CLI does not.
+
 LAN development adds `bin/netd`, `bin/net`, and `lib/libnetd.so.1`, built
 with netd's raw `netd`, `net`, and `libnetd` targets. Stage all three
 together. Partial network sets are rejected before publication. Once a

@@ -1,0 +1,4 @@
+title = "RADIUS"
+description = "Manage RADIUS clients, access policies, authentication and certificates"
+program = "/usr/bin/radius"
+arguments = ["--window"]

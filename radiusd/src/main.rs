@@ -13,7 +13,7 @@ use radiusd::{
 use std::{
     io,
     net::{SocketAddr, UdpSocket},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -45,90 +45,116 @@ fn sockets(addresses: &[SocketAddr], old: &[UdpSocket]) -> io::Result<Vec<UdpSoc
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().len() != 1 {
-        return Err("radiusd takes its configuration from the Registry; no credential CLI arguments are accepted".into());
+        return Err("radiusd takes configuration from the Registry".into());
     }
-    let actor = Token::open_self(false, TokenAccess::QUERY)
-        .map_err(|error| format!("cannot query service token: {error}"))?
-        .user()
-        .map_err(|error| format!("cannot read service identity: {error}"))?;
+    let actor = Token::open_self(false, TokenAccess::QUERY)?.user()?;
     if actor != radiusd::config::SERVICE_SID.parse::<Sid>()? {
         return Err("radiusd requires its distinct Identity=Service account".into());
     }
     let updates = watch();
-    let config = match updates.recv()? {
-        Update::Pending => match updates.recv()? {
-            Update::Valid(config) => config,
-            _ => return Err("invalid initial RADIUS configuration".into()),
-        },
-        Update::Valid(config) => config,
-        _ => return Err("invalid initial RADIUS configuration".into()),
-    };
-    let bound = sockets(&config.listeners, &[])
-        .map_err(|error| format!("cannot open configured listeners: {error}"))?;
-    let mut sink = Sink::new(bound, actor)?;
-    let mut driver = Driver::new(config.clone(), Auth).map_err(io::Error::other)?;
-    let mut active = config;
-    sink.configuration(true);
-    // Peinit's normal service-manager notification interface.
-    ready().map_err(|error| format!("cannot notify service readiness: {error}"))?;
-    let mut valid = true;
+    let mut sink = Sink::new(Vec::new(), actor)?;
+    let mut driver: Option<Driver<Auth>> = None;
+    let status = Arc::new(Mutex::new(radius_management::status::Status::default()));
+    radius_management::native::control::serve(status.clone())?;
+    // Readiness means the local status service is ready. Invalid configuration
+    // remains diagnosable and repairable while no authentication is admitted.
+    ready()?;
+    let mut announced = None;
     let mut bytes = [0u8; 65536];
     loop {
-        // A bounded channel keeps configuration and key material bounded.
         for _ in 0..4 {
             match updates.try_recv() {
-                Ok(Update::Pending) => driver.pause(),
-                Ok(Update::Invalid) => {
-                    driver.pause();
-                    if valid {
-                        sink.configuration(false);
-                        valid = false;
+                Ok(Update::Pending) => {
+                    if let Some(d) = driver.as_mut() {
+                        d.pause();
+                    }
+                    if let Ok(mut s) = status.lock() {
+                        s.state = "validating".into();
                     }
                 }
-                Ok(Update::Valid(config)) => match sockets(&config.listeners, &sink.sockets) {
-                    Ok(sockets) => {
-                        driver
-                            .activate(Arc::clone(&config))
-                            .map_err(io::Error::other)?;
-                        sink.sockets = sockets;
-                        active = config;
-                        valid = true;
-                        sink.configuration(true);
+                Ok(Update::Invalid { saved, issues }) => {
+                    if let Some(d) = driver.as_mut() {
+                        d.pause();
                     }
-                    Err(_) => {
-                        driver.pause();
-                        valid = false;
+                    if let Ok(mut s) = status.lock() {
+                        s.state = "invalid".into();
+                        s.saved_fingerprint = saved;
+                        s.issues = issues;
+                    }
+                    if announced != Some(false) {
                         sink.configuration(false);
-                        sink.warning("configured listener could not be bound");
+                        announced = Some(false);
                     }
-                },
+                }
+                Ok(Update::Valid(config)) => {
+                    let activated = sockets(&config.listeners, &sink.sockets).and_then(|sockets| {
+                        if let Some(d) = driver.as_mut() {
+                            d.activate(config.clone()).map_err(io::Error::other)?;
+                        } else {
+                            driver =
+                                Some(Driver::new(config.clone(), Auth).map_err(io::Error::other)?);
+                        }
+                        Ok(sockets)
+                    });
+                    match activated {
+                        Ok(sockets) => {
+                            sink.sockets = sockets;
+                            if let Ok(mut s) = status.lock() {
+                                s.state = "active".into();
+                                s.saved_fingerprint = Some(config.saved_fingerprint.clone());
+                                s.effective_fingerprint = Some(config.saved_fingerprint.clone());
+                                s.listeners =
+                                    config.listeners.iter().map(ToString::to_string).collect();
+                                s.issues.clear();
+                            }
+                            sink.configuration(true);
+                            announced = Some(true);
+                        }
+                        Err(error) => {
+                            if let Some(d) = driver.as_mut() {
+                                d.pause();
+                            }
+                            if let Ok(mut s) = status.lock() {
+                                s.state = "invalid".into();
+                                s.saved_fingerprint = Some(config.saved_fingerprint.clone());
+                                s.issues = vec![radius_management::model::Issue {
+                                    object: "Settings".into(),
+                                    field: "Listen".into(),
+                                    message: format!("cannot activate configuration: {error}"),
+                                }];
+                            }
+                            if announced != Some(false) {
+                                sink.configuration(false);
+                                announced = Some(false);
+                            }
+                        }
+                    }
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     return Err("configuration worker stopped".into())
                 }
             }
         }
-        let now = Instant::now();
-        for listener in 0..sink.sockets.len() {
-            // Fairness: a flooding socket cannot prevent expiry/backend work.
-            for _ in 0..32 {
-                match sink.sockets[listener].recv_from(&mut bytes) {
-                    Ok((size, peer)) => {
-                        driver.receive(now, listener, peer, &bytes[..size], &mut sink)
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(_) => {
-                        sink.warning("UDP receive failed");
-                        break;
+        if let Some(driver) = driver.as_mut() {
+            let now = Instant::now();
+            for listener in 0..sink.sockets.len() {
+                for _ in 0..32 {
+                    match sink.sockets[listener].recv_from(&mut bytes) {
+                        Ok((size, peer)) => {
+                            driver.receive(now, listener, peer, &bytes[..size], &mut sink)
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                        Err(_) => {
+                            sink.warning("UDP receive failed");
+                            break;
+                        }
                     }
                 }
             }
+            driver.tick(Instant::now(), &mut sink);
         }
-        driver.tick(Instant::now(), &mut sink);
-        // Native libauth step is nonblocking. This bounds readiness latency
-        // without a thread or blocking wait per password verification.
         std::thread::sleep(Duration::from_millis(5));
-        let _ = &active;
     }
 }
 fn ready() -> io::Result<()> {

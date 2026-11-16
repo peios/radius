@@ -32,22 +32,22 @@ client wrong-ssid 1.2 dev-radius development-only-password drop Other
 lps group remove dev-radius household
 client removed-group 1.2 dev-radius development-only-password reject
 lps group add dev-radius household
-reg set "$root/Networks/home" ConnectSecurity "sz:O:SYG:SYD:(XA;;0x1;;;${group_sid};(@User.Department == \"Engineering\"))"
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" ConnectSecurity "sz:O:SYG:SYD:(XA;;0x1;;;${group_sid};(@User.Department == \"Engineering\"))"
 sleep 1
 client disclosed-claim 1.2
 # Explicit policy keeps Authenticate but withholds every claim. Hidden values
 # must stay unknown; neither a positive nor a negative rule may grant access.
 reg set "$policy" AuthenticationSecurity "sz:O:SYG:SYD:(A;;0xf;;;SY)(A;;0x1;;;${auth_cap})(A;;0x2;;;${logon_cap})(A;;0x4;;;${radius_sid})"
 client restricted-positive-claim 1.2 dev-radius development-only-password reject
-reg set "$root/Networks/home" ConnectSecurity "sz:O:SYG:SYD:(XA;;0x1;;;${group_sid};(!Exists @User.Secret))"
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" ConnectSecurity "sz:O:SYG:SYD:(XA;;0x1;;;${group_sid};(!Exists @User.Secret))"
 sleep 1
 client restricted-negative-claim 1.2 dev-radius development-only-password reject
 reg del -y "$policy" AuthenticationSecurity
 client complete-known-absence 1.2
-reg set "$root/Networks/home" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})S:(AU;SA;0x1;;;${group_sid})"
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})S:(AU;SA;0x1;;;${group_sid})"
 sleep 1
 client audit-requirement 1.2
-reg set "$root/Networks/home" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})"
+reg set "$root/AccessPolicies/22222222-2222-4222-8222-222222222222" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})"
 reg set "$root/Settings" MaxVerifications dword:0
 sleep 1
 client invalid-configuration 1.2 dev-radius development-only-password drop
@@ -56,10 +56,10 @@ sleep 1
 client recovered-configuration 1.2
 # Prepare a new protected immutable secret file before publishing its reference.
 cp /mnt/dev/credentials/rotated-secret /var/state/radius/secrets/rotated-secret
-reg set "$root/Clients/aps" SecretFile sz:/var/state/radius/secrets/rotated-secret
+reg set "$root/Clients/11111111-1111-4111-8111-111111111111" SecretFile sz:/var/state/radius/secrets/rotated-secret
 sleep 1
 client old-secret-after-rotation 1.2 dev-radius development-only-password drop
-reg set "$root/Clients/aps" SecretFile sz:/var/state/radius/secrets/secret
+reg set "$root/Clients/11111111-1111-4111-8111-111111111111" SecretFile sz:/var/state/radius/secrets/secret
 sleep 1
 client restored-secret 1.2
 svctl stop lpsd

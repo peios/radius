@@ -1,3 +1,23 @@
+--- field object.network.id
+type: str
+asserted: true
+
+The Registry network record identifier whose Connect descriptor radiusd checked.
+
+Copied from radiusd's audit context by the kernel. The object kind is `network`;
+its access mask defines Connect as bit 0 (0x1). This is a configuration identity,
+not a kernel-observed network or proof that the supplied descriptor belongs to it.
+
+--- field object.network.ssid
+type: str
+asserted: true
+
+The network's SSID as a display label, copied from radiusd's audit context.
+
+Invalid UTF-8 bytes are replaced with U+FFFD for display. This label never
+selects policy; radiusd binds the exchange using the original SSID bytes and
+identifies the configuration with `object.network.id`.
+
 --- field source.radiusd.username
 type: str
 
@@ -58,7 +78,7 @@ field: object.account.sid                   optional
   Present together with the canonical name; the verified user's SID.
 field: outcome.success                      required
 field: outcome.reason                       when outcome.success == false
-  values: authentication-failed | permission-denied | missing-context | authority-unavailable | conversation-limit | timed-out | binding-changed | protocol-error | undelivered
+  values: authentication-failed | permission-denied | missing-context | authority-unavailable | kernel-api-unavailable | access-check-error | conversation-limit | timed-out | binding-changed | protocol-error | undelivered
   closed: false
 
 --- event radiusd.configuration.loaded

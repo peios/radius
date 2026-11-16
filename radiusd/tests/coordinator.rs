@@ -56,8 +56,9 @@ impl Backend for Fake {
             Progress::Waiting
         }
     }
-    fn admission(&mut self, _: &(), security: &[u8]) -> Result<(), Reason> {
-        if security == [1] {
+    fn admission(&mut self, _: &(), network_id: &str, network: &Network) -> Result<(), Reason> {
+        assert!(!network_id.is_empty());
+        if network.security == [1] {
             Ok(())
         } else {
             Err(Reason::Policy)

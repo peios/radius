@@ -1,11 +1,11 @@
 use crate::{
-    config::CONNECT,
+    config::{Network, CONNECT},
     driver::{Backend, Progress, Reason},
 };
 use peios::{
     access::{
-        AccessCheck, ClaimCoverage, SubjectAccessDecision, SubjectGroup, SuppliedClaims,
-        SuppliedSubject,
+        AccessCheck, AuditContext, AuditValue, ClaimCoverage, SubjectAccessDecision, SubjectGroup,
+        SuppliedClaims, SuppliedSubject,
     },
     security::{AccessMask, GenericMapping, SecurityDescriptor, Sid, SidRef},
     token::{Claim, ClaimAttr, ClaimValues},
@@ -168,17 +168,26 @@ impl Backend for Auth {
     fn mschapv2_success(&self, subject: &Authenticated) -> Option<[u8; 20]> {
         subject.mschapv2_authenticator_response
     }
-    fn admission(&mut self, identity: &Authenticated, security: &[u8]) -> Result<(), Reason> {
-        evaluate(identity, security)
+    fn admission(
+        &mut self,
+        identity: &Authenticated,
+        network_id: &str,
+        network: &Network,
+    ) -> Result<(), Reason> {
+        evaluate(identity, network_id, network)
     }
     fn identity<'a>(&self, subject: &'a Authenticated) -> (&'a str, &'a [u8]) {
         (&subject.identity.name, &subject.identity.sid)
     }
 }
 
-pub fn evaluate(identity: &Authenticated, security: &[u8]) -> Result<(), Reason> {
-    let sd =
-        SecurityDescriptor::from_validated_bytes(security.to_vec()).map_err(|_| Reason::Policy)?;
+pub fn evaluate(
+    identity: &Authenticated,
+    network_id: &str,
+    network: &Network,
+) -> Result<(), Reason> {
+    let sd = SecurityDescriptor::from_validated_bytes(network.security.clone())
+        .map_err(|_| Reason::Policy)?;
     let user = SidRef::from_bytes(&identity.identity.sid).ok_or(Reason::MissingContext)?;
     let Some(Field::References(memberships)) = identity.identity.fields.get(&fields::GROUPS) else {
         return Err(Reason::MissingContext);
@@ -216,10 +225,20 @@ pub fn evaluate(identity: &Authenticated, security: &[u8]) -> Result<(), Reason>
         ..Default::default()
     };
     let mapping = GenericMapping::new(CONNECT, 0, CONNECT, CONNECT);
+    // This display label never selects policy; binding uses the original bytes.
+    let ssid = String::from_utf8_lossy(&network.ssid);
+    let context = AuditContext::new(
+        "network",
+        &[("id", network_id.into()), ("ssid", AuditValue::Str(&ssid))],
+    )
+    .map_err(|_| Reason::AccessCheck)?;
     match AccessCheck::new(&sd, AccessMask::from_bits_retain(CONNECT), mapping)
+        .audit_context(&context)
         .check_subject(&subject)
-        .map_err(|_| Reason::MissingContext)?
-    {
+        .map_err(|error| match error.raw_os_error() {
+            Some(libc::ENOSYS | libc::EOPNOTSUPP) => Reason::KernelUnsupported,
+            _ => Reason::AccessCheck,
+        })? {
         SubjectAccessDecision::Granted { .. } => Ok(()),
         SubjectAccessDecision::Denied { .. } => Err(Reason::Policy),
         SubjectAccessDecision::MissingContext { .. } => Err(Reason::MissingContext),

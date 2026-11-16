@@ -75,8 +75,21 @@ later username lookup or invent local-session group memberships.
 For example, grant Connect to a source's household group SID. An
 Everyone ACE matches only when that membership is supplied; the adapter
 does not add it. Hidden claims remain unknown. Missing context, device
-or local execution requirements, and unsupported SACL auditing deny
-admission. The userspace checker conveys no kernel authority.
+or local execution requirements deny admission. The stateless kernel query
+conveys no token authority. An older kernel fails admission with
+`kernel-api-unavailable`; other query errors use `access-check-error`, independently
+of wrong credentials and an ordinary policy denial. There is no userspace
+evaluator fallback.
+
+Each check supplies the stable Registry network ID and SSID display label in an
+`AuditContext` of kind `network`. Invalid UTF-8 in the label is replaced with
+U+FFFD; policy binding still uses the original SSID bytes. The fields are defined
+as asserted values in radiusd's event catalogue fragment. Matching SACL audit
+ACEs produce `kacs.audit.subject.checked`
+when radiusd holds enabled `SeAuditPrivilege`. The event identifies radiusd's
+real caller identity separately from the supplied, hypothetical user SID.
+Audit preparation errors fail admission. radiusd's own admission events remain
+separate and describe the real service decision.
 
 Current policy is checked immediately before success and key delivery.
 Access-Accept carries signed Session-Timeout and Termination-Action
@@ -172,6 +185,6 @@ Passing these checks is development evidence, not a production release
 or a complete security audit. Real UniFi/iPhone TTLS/PAP connectivity and
 a profile-free iPhone join through PEAP have succeeded in development
 trials. Roaming and AP reauthentication enforcement need their own
-qualification. After this MVP, replace the temporary
-userspace checker with the planned kernel API and add generic public
-Registry read snapshots before further feature expansion.
+qualification. The supplied-subject evaluator runs in the kernel;
+generic public Registry read snapshots remain a separate follow-up before
+further feature expansion.

@@ -219,10 +219,12 @@ Ordinary security descriptor for the network's Connect right, mask 0x1.
 
 Generic read, execute, and all map to Connect; generic write maps to zero.
 Supply an owner. An absent DACL deliberately grants access; an empty DACL
-denies it. Missing identity context, unsupported execution context, and SACL
-audit requirements fail closed. The temporary userspace checker creates no
-kernel token and cannot impersonate the user. Source groups are used as
-returned by authd, without inventing local-session or built-in memberships.
+denies it. Missing identity context, unsupported execution context, and
+detected access-check or audit preparation errors fail closed. Matching SACL
+audit ACEs follow the kernel query's caller privilege gate. The stateless
+kernel checker creates no token and cannot impersonate the user. Source groups
+are used as returned by authd, without inventing local-session or built-in
+memberships.
 
 --- machine\software\radius\networks\<network> authenticationmethods
 canonical: Machine\Software\Radius\Networks\<network> AuthenticationMethods

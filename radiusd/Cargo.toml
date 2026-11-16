@@ -16,8 +16,8 @@ rustls.workspace = true
 zeroize.workspace = true
 libc = { version = "0.2", optional = true }
 socket2 = { version = "0.6", optional = true }
-peios = { git = "https://github.com/peios/peios-rs.git", rev = "3950d35950c46cb3538885b7cf05bde059393def", optional = true }
-peios-auth = { git = "https://github.com/peios/authd.git", rev = "ea3c9f90c48052ff0c0757d88032c9c706964b9a", optional = true }
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e", optional = true }
+peios-auth = { git = "https://github.com/peios/authd.git", rev = "5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652", optional = true }
 
 [dev-dependencies]
 rcgen = { version = "=0.14.9", default-features = false, features = ["ring", "crypto"] }

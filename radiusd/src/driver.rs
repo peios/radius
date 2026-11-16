@@ -1,6 +1,6 @@
 //! Nonblocking integration coordinator. Backend operations and supplied-subject
 //! decisions are adapter-owned; no username lookup reconstructs an identity.
-use crate::config::{called_ssid, Config};
+use crate::config::{called_ssid, Config, Network};
 use radius_core::{Admission, Binding, Client, Engine, Outcome, Reply, Verification};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 
@@ -11,6 +11,8 @@ pub enum Reason {
     Policy,
     MissingContext,
     Backend,
+    KernelUnsupported,
+    AccessCheck,
     Busy,
     Timeout,
     Binding,
@@ -25,6 +27,8 @@ impl Reason {
             Self::Policy => "permission-denied",
             Self::MissingContext => "missing-context",
             Self::Backend => "authority-unavailable",
+            Self::KernelUnsupported => "kernel-api-unavailable",
+            Self::AccessCheck => "access-check-error",
             Self::Busy => "conversation-limit",
             Self::Timeout => "timed-out",
             Self::Binding => "binding-changed",
@@ -55,7 +59,12 @@ pub trait Backend {
     fn mschapv2_success(&self, _subject: &Self::Subject) -> Option<[u8; 20]> {
         None
     }
-    fn admission(&mut self, subject: &Self::Subject, security: &[u8]) -> Result<(), Reason>;
+    fn admission(
+        &mut self,
+        subject: &Self::Subject,
+        network_id: &str,
+        network: &Network,
+    ) -> Result<(), Reason>;
     fn identity<'a>(&self, subject: &'a Self::Subject) -> (&'a str, &'a [u8]);
 }
 pub struct Event<'a> {
@@ -312,13 +321,13 @@ impl<B: Backend> Driver<B> {
                 continue;
             }
             let result = attempt.result.take().unwrap();
-            let Some((client, _, network)) = self.config.bound(&attempt.binding) else {
+            let Some((client, network_id, network)) = self.config.bound(&attempt.binding) else {
                 continue;
             };
             let reason = match &result {
                 Ok(subject) => self
                     .backend
-                    .admission(subject, &network.security)
+                    .admission(subject, network_id, network)
                     .err()
                     .unwrap_or(Reason::Granted),
                 Err(reason) => *reason,

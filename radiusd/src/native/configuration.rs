@@ -242,13 +242,27 @@ pub fn load() -> io::Result<Config> {
             .control()
             .contains(Control::DACL_PRESENT);
         let reauthenticate_seconds = number(&key, "ReauthenticateSeconds", 3600)?;
+        let methods = match value(&key, "AuthenticationMethods")? {
+            None => vec![radius_core::Method::TtlsPap],
+            Some(_) => strings(&key, "AuthenticationMethods")?
+                .iter()
+                .map(|name| {
+                    radius_core::Method::parse(name)
+                        .ok_or_else(|| invalid("unknown authentication method"))
+                })
+                .collect::<io::Result<Vec<_>>>()?,
+        };
         stamp(&mut hash, name.as_bytes());
         stamp(&mut hash, &ssid);
         stamp(&mut hash, security.as_bytes());
         stamp(&mut hash, &reauthenticate_seconds.to_be_bytes());
+        for method in &methods {
+            stamp(&mut hash, method.name().as_bytes());
+        }
         networks.insert(
             name,
             Network {
+                methods,
                 ssid,
                 security: security.as_bytes().to_vec(),
                 reauthenticate_seconds,

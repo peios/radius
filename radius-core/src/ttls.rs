@@ -1,10 +1,14 @@
-use crate::{pap, Credentials, Error};
+use crate::{
+    pap,
+    peap::{Inner, Peap},
+    Credentials, Error, Method,
+};
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer},
     ServerConfig, ServerConnection,
 };
 use std::{
-    io::{Cursor, Read},
+    io::{Cursor, Read, Write},
     sync::Arc,
 };
 use zeroize::{Zeroize, Zeroizing};
@@ -35,9 +39,12 @@ pub fn server_config(
 pub(crate) enum Step {
     Send(Vec<u8>),
     Verify(Credentials),
+    Mschapv2Response([u8; 40]),
+    Complete,
 }
 
 pub(crate) struct Tunnel {
+    peap: Option<Peap>,
     tls: ServerConnection,
     incoming: Vec<u8>,
     expected: Option<usize>,
@@ -48,10 +55,30 @@ pub(crate) struct Tunnel {
 }
 
 impl Tunnel {
-    pub(crate) fn new(config: Arc<ServerConfig>, mtu: usize) -> Result<Self, Error> {
+    pub(crate) fn new_method(
+        config: Arc<ServerConfig>,
+        mtu: usize,
+        method: Method,
+    ) -> Result<Self, Error> {
+        // PEAPv0's initial interoperability slice uses its TLS 1.2 key schedule.
+        // TTLS retains both previously qualified TLS versions.
+        let config = if method == Method::PeapMschapv2 {
+            let mut peap = ServerConfig::builder_with_provider(config.crypto_provider().clone())
+                .with_protocol_versions(&[&rustls::version::TLS12])
+                .map_err(|_| Error::Configuration)?
+                .with_no_client_auth()
+                .with_cert_resolver(config.cert_resolver.clone());
+            peap.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+            peap.send_tls13_tickets = 0;
+            peap.max_tls13_tickets = 0;
+            Arc::new(peap)
+        } else {
+            config
+        };
         let mut tls = ServerConnection::new(config).map_err(|_| Error::Tls)?;
         tls.set_buffer_limit(Some(MAX_TLS));
         Ok(Self {
+            peap: (method == Method::PeapMschapv2).then(Peap::new),
             tls,
             incoming: Vec::new(),
             expected: None,
@@ -64,6 +91,13 @@ impl Tunnel {
 
     pub(crate) fn step(&mut self, data: &[u8]) -> Result<Step, Error> {
         let (&flags, tail) = data.split_first().ok_or(Error::Malformed)?;
+        // MS-PEAP reserved flag bits are ignored on receipt. Version 0 and
+        // client-side absence of Start remain mandatory.
+        let flags = if self.peap.is_some() {
+            flags & 0xe1
+        } else {
+            flags
+        };
         // TTLSv0 only. A peer cannot send a server Start frame.
         if flags & 0x3f != 0 {
             return Err(Error::Protocol);
@@ -75,13 +109,19 @@ impl Tunnel {
             return Ok(Step::Send(self.next_fragment()));
         }
         let (length, payload) = if flags & 0x80 != 0 {
-            if tail.len() < 4 || self.expected.is_some() {
+            if tail.len() < 4 {
                 return Err(Error::Malformed);
             }
             let len =
                 u32::from_be_bytes(tail[..4].try_into().map_err(|_| Error::Malformed)?) as usize;
             if len == 0 || len > MAX_TLS {
                 return Err(Error::Limit);
+            }
+            if self
+                .expected
+                .is_some_and(|expected| self.peap.is_none() || expected != len)
+            {
+                return Err(Error::Malformed);
             }
             (Some(len), &tail[4..])
         } else {
@@ -151,6 +191,23 @@ impl Tunnel {
         if !self.outgoing.is_empty() {
             return Ok(Step::Send(self.next_fragment()));
         }
+        if !self.tls.is_handshaking() && self.peap.is_some() {
+            let result = self
+                .peap
+                .as_mut()
+                .ok_or(Error::Protocol)?
+                .process(&self.plaintext)?;
+            if !matches!(result, Inner::More) {
+                self.plaintext.zeroize();
+            }
+            return match result {
+                Inner::Send(data) => Ok(Step::Send(self.encrypt(&data)?)),
+                Inner::Verify(credentials) => Ok(Step::Verify(credentials)),
+                Inner::Response(response) => Ok(Step::Mschapv2Response(response)),
+                Inner::Complete => Ok(Step::Complete),
+                Inner::More => Ok(Step::Send(vec![0])),
+            };
+        }
         if !self.tls.is_handshaking() && !self.plaintext.is_empty() {
             if let Some(credentials) = pap::credentials(&self.plaintext)? {
                 self.plaintext.zeroize();
@@ -178,12 +235,54 @@ impl Tunnel {
         frame
     }
 
+    fn encrypt(&mut self, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+        if !self.outgoing.is_empty() || self.tls.is_handshaking() {
+            return Err(Error::Protocol);
+        }
+        self.tls.writer().write_all(bytes).map_err(|_| Error::Tls)?;
+        while self.tls.wants_write() {
+            self.tls
+                .write_tls(&mut self.outgoing)
+                .map_err(|_| Error::Tls)?;
+            if self.outgoing.len() > MAX_TLS {
+                return Err(Error::Limit);
+            }
+        }
+        Ok(self.next_fragment())
+    }
+    pub fn mschapv2_challenge(&mut self, challenge: [u8; 16]) -> Result<Vec<u8>, Error> {
+        let bytes = self
+            .peap
+            .as_mut()
+            .ok_or(Error::Protocol)?
+            .challenge(challenge)?;
+        self.encrypt(&bytes)
+    }
+    pub fn mschapv2_success(&mut self, success: [u8; 20]) -> Result<Vec<u8>, Error> {
+        let bytes = self
+            .peap
+            .as_mut()
+            .ok_or(Error::Protocol)?
+            .success(success)?;
+        self.encrypt(&bytes)
+    }
+    pub fn peap_complete(&self) -> bool {
+        self.peap.as_ref().is_some_and(Peap::complete)
+    }
+
     pub(crate) fn msk(&self) -> Result<Zeroizing<[u8; 64]>, Error> {
         if self.tls.is_handshaking() {
             return Err(Error::Protocol);
         }
         let (label, context): (&[u8], Option<&[u8]>) = match self.tls.protocol_version() {
-            Some(rustls::ProtocolVersion::TLSv1_2) => (b"ttls keying material", None),
+            Some(rustls::ProtocolVersion::TLSv1_2) => (
+                if self.peap.is_some() {
+                    b"client EAP encryption"
+                } else {
+                    b"ttls keying material"
+                },
+                None,
+            ),
             Some(rustls::ProtocolVersion::TLSv1_3) => {
                 (b"EXPORTER_EAP_TLS_Key_Material", Some(&[21]))
             }

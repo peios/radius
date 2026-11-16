@@ -10,6 +10,7 @@ const USER: &str = "S-1-5-21-1-2-3-1000";
 const GROUP: &str = "S-1-5-21-1-2-3-1001";
 fn subject() -> Authenticated {
     Authenticated {
+        mschapv2_authenticator_response: None,
         identity: Record {
             sid: USER.parse::<Sid>().unwrap().as_bytes().to_vec(),
             name: "local\\jack".into(),

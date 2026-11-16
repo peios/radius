@@ -110,21 +110,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let reply = match outcome {
             Ok(Outcome::Reply(reply)) => Some(reply),
             Ok(Outcome::Verify(verification)) => {
+                let radius_core::Credential::Password(supplied_password) =
+                    &verification.credentials.proof
+                else {
+                    continue;
+                };
                 // This fixture does not emulate authd. Production integration
                 // retains the full verified subject on this exact attempt.
-                let credential_ok = bool::from(
-                    verification
-                        .credentials
-                        .password
-                        .as_slice()
-                        .ct_eq(password.as_slice()),
-                ) & bool::from(
-                    verification
-                        .credentials
-                        .username
-                        .as_slice()
-                        .ct_eq(&username),
-                );
+                let credential_ok =
+                    bool::from(supplied_password.as_slice().ct_eq(password.as_slice()))
+                        & bool::from(
+                            verification
+                                .credentials
+                                .username
+                                .as_slice()
+                                .ct_eq(&username),
+                        );
                 let decision = if credential_ok && !deny {
                     Admission::Granted
                 } else {
@@ -145,7 +146,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .ok()
             }
-            Ok(Outcome::Drop) | Err(_) => None,
+            Ok(Outcome::Drop | Outcome::Mschapv2Response { .. }) | Err(_) => None,
         };
         if let Some(reply) = reply {
             socket.send_to(&reply.bytes, reply.peer)?;

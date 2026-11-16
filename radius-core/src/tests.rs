@@ -173,7 +173,10 @@ fn pap_stream_boundaries_duplicates_and_required_attributes() {
     }
     let credentials = pap::credentials(&message).unwrap().unwrap();
     assert_eq!(credentials.username, b"jack");
-    assert_eq!(&*credentials.password, b"test-password");
+    let crate::Credential::Password(password) = &credentials.proof else {
+        panic!("expected PAP");
+    };
+    assert_eq!(&**password, b"test-password");
     assert!(!format!("{credentials:?}").contains("test-password"));
     let mut duplicate = message.clone();
     avp(&mut duplicate, 1, b"admin");
@@ -369,9 +372,241 @@ fn pending() -> (Engine, Verification, Vec<u8>, Instant) {
             Outcome::Reply(reply) => output = reply.bytes,
             Outcome::Verify(verification) => return (engine, verification, packet, now),
             Outcome::Drop => panic!("unexpected drop"),
+            Outcome::Mschapv2Response { .. } => panic!("unexpected MSCHAPv2 proof"),
         }
     }
     panic!("exchange did not finish");
+}
+
+#[test]
+fn peap_negotiates_and_completes_only_after_tunneled_confirmation() {
+    use std::io::Read;
+    let methods = [Method::PeapMschapv2, Method::TtlsPap];
+    let (mut engine, mut tls_client) = setup(Limits {
+        frame_payload: 128,
+        ..Limits::default()
+    });
+    let now = Instant::now();
+    let mut output = reply(
+        engine
+            .receive_with_methods(now, peer(), client(binding()), &identity(1), &methods)
+            .unwrap(),
+    );
+    let mut server_bytes = Vec::new();
+    let mut id = None;
+    let mut backend_called = false;
+    let mut proof_seen = false;
+    for radius_id in 2..=200 {
+        let (eap, state) = decoded(&output);
+        assert_eq!(output[0], 11);
+        assert_eq!(eap[4], 25);
+        let flags = eap[5];
+        server_bytes.extend_from_slice(if flags & 0x80 != 0 {
+            &eap[10..]
+        } else {
+            &eap[6..]
+        });
+        let mut send = vec![0];
+        if flags & 0x40 == 0 {
+            let mut cursor = Cursor::new(std::mem::take(&mut server_bytes));
+            while cursor.position() < cursor.get_ref().len() as u64 {
+                tls_client.read_tls(&mut cursor).unwrap();
+                tls_client.process_new_packets().unwrap();
+            }
+            let mut plaintext = Vec::new();
+            let mut scratch = [0; 4096];
+            loop {
+                match tls_client.reader().read(&mut scratch) {
+                    Ok(0) => break,
+                    Ok(n) => plaintext.extend_from_slice(&scratch[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => panic!("{e}"),
+                }
+            }
+            let answer = match plaintext.first() {
+                None => Vec::new(),
+                Some(1) if plaintext.len() == 1 => b"\x01User".to_vec(),
+                Some(26) if plaintext[1] == 1 => {
+                    assert_eq!(&plaintext[6..22], &[7; 16]);
+                    let mut answer = vec![26, 2, plaintext[2], 0, 58, 49];
+                    answer.extend_from_slice(&[1; 16]);
+                    answer.extend_from_slice(&[0; 8]);
+                    answer.extend_from_slice(&[2; 24]);
+                    answer.push(0);
+                    answer.extend_from_slice(b"User");
+                    answer
+                }
+                Some(26) if plaintext[1] == 3 => {
+                    assert!(proof_seen);
+                    assert_eq!(
+                        &plaintext[5..],
+                        b"S=ABABABABABABABABABABABABABABABABABABABAB"
+                    );
+                    vec![26, 3]
+                }
+                Some(1) if plaintext.len() == 11 && plaintext[4] == 33 => {
+                    assert!(engine.has_attempt(&id.unwrap()));
+                    plaintext[0] = 2;
+                    plaintext
+                }
+                _ => panic!("unexpected inner exchange"),
+            };
+            if !answer.is_empty() {
+                tls_client.writer().write_all(&answer).unwrap();
+            }
+            while tls_client.wants_write() {
+                tls_client.write_tls(&mut send).unwrap();
+            }
+        }
+        let packet = request(radius_id, eap[1], state, 25, &send);
+        match engine
+            .receive_with_methods(now, peer(), client(binding()), &packet, &methods)
+            .unwrap()
+        {
+            Outcome::Reply(reply) => output = reply.bytes,
+            Outcome::Verify(verification) => {
+                assert!(!backend_called);
+                backend_called = true;
+                assert_eq!(verification.credentials.username, b"User");
+                assert!(matches!(
+                    verification.credentials.proof,
+                    Credential::Mschapv2
+                ));
+                id = Some(verification.id());
+                output = engine
+                    .mschapv2_challenge(now, id.unwrap(), [7; 16])
+                    .unwrap()
+                    .bytes;
+            }
+            Outcome::Mschapv2Response {
+                id: current,
+                response,
+            } => {
+                assert_eq!(Some(current), id);
+                assert_eq!(&response[..16], &[1; 16]);
+                assert_eq!(&response[16..], &[2; 24]);
+                proof_seen = true;
+                output = engine
+                    .finish_with_protocol(
+                        now,
+                        current,
+                        client(binding()),
+                        Admission::Granted,
+                        Some(3600),
+                        Some([0xab; 20]),
+                    )
+                    .unwrap()
+                    .bytes;
+                assert_eq!(output[0], 11);
+            }
+            Outcome::Drop => {
+                let accepted = engine
+                    .finish_with_protocol(
+                        now,
+                        id.unwrap(),
+                        client(binding()),
+                        Admission::Granted,
+                        Some(3600),
+                        Some([0xab; 20]),
+                    )
+                    .unwrap();
+                assert_eq!(accepted.bytes[0], 2);
+                assert_eq!(decoded(&accepted.bytes).0[0], 3);
+                assert_eq!(engine.active_attempts(), 0);
+                assert!(backend_called && proof_seen);
+                return;
+            }
+        }
+    }
+    panic!("PEAP did not finish");
+}
+
+#[test]
+fn nak_chooses_only_an_allowed_untried_method() {
+    let methods = [Method::PeapMschapv2, Method::TtlsPap];
+    let (mut engine, _) = setup(Limits::default());
+    let now = Instant::now();
+    let initial = reply(
+        engine
+            .receive_with_methods(now, peer(), client(binding()), &identity(1), &methods)
+            .unwrap(),
+    );
+    let (eap, state) = decoded(&initial);
+    assert_eq!(eap[4], 25);
+    let switched = reply(
+        engine
+            .receive_with_methods(
+                now,
+                peer(),
+                client(binding()),
+                &request(2, eap[1], state, 3, &[21]),
+                &methods,
+            )
+            .unwrap(),
+    );
+    let (eap, state) = decoded(&switched);
+    assert_eq!(eap[4], 21);
+    let rejected = reply(
+        engine
+            .receive_with_methods(
+                now,
+                peer(),
+                client(binding()),
+                &request(3, eap[1], state, 3, &[25]),
+                &methods,
+            )
+            .unwrap(),
+    );
+    assert_eq!(rejected[0], 3);
+}
+
+#[test]
+fn peap_fragment_lengths_may_repeat_but_cannot_change() {
+    for change in [false, true] {
+        let (mut engine, mut peer_tls) = setup(Limits::default());
+        let now = Instant::now();
+        let methods = [Method::PeapMschapv2];
+        let start = reply(
+            engine
+                .receive_with_methods(now, peer(), client(binding()), &identity(1), &methods)
+                .unwrap(),
+        );
+        let (eap, state) = decoded(&start);
+        let mut hello = Vec::new();
+        peer_tls.write_tls(&mut hello).unwrap();
+        assert!(hello.len() > 128);
+        let mut fragment = vec![0xc0];
+        fragment.extend_from_slice(&(hello.len() as u32).to_be_bytes());
+        fragment.extend_from_slice(&hello[..128]);
+        let ack = reply(
+            engine
+                .receive_with_methods(
+                    now,
+                    peer(),
+                    client(binding()),
+                    &request(2, eap[1], state, 25, &fragment),
+                    &methods,
+                )
+                .unwrap(),
+        );
+        let (eap, state) = decoded(&ack);
+        assert_eq!(&eap[5..], &[0]);
+        let mut fragment = vec![0x80];
+        fragment.extend_from_slice(&(hello.len() as u32 + u32::from(change)).to_be_bytes());
+        fragment.extend_from_slice(&hello[128..]);
+        let response = reply(
+            engine
+                .receive_with_methods(
+                    now,
+                    peer(),
+                    client(binding()),
+                    &request(3, eap[1], state, 25, &fragment),
+                    &methods,
+                )
+                .unwrap(),
+        );
+        assert_eq!(response[0], if change { 3 } else { 11 });
+    }
 }
 
 #[test]

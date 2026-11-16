@@ -3,6 +3,9 @@
 set -euo pipefail
 [[ ${PEIOS_DISPOSABLE_RADIUS_TEST:-} == yes ]] || exit 2
 export PATH=/lcl/bin:$PATH LD_LIBRARY_PATH=/lcl/lib
+if [[ ${RADIUS_DEV_RUNTIME:-0} == 1 ]]; then
+    export PATH=/lcl/radius-dev/current/bin:$PATH LD_LIBRARY_PATH=/lcl/radius-dev/current/lib
+fi
 radius_sid=S-1-5-80-1653768611-2164381495-1902105107-3452022516-881820819
 auth_cap=S-1-15-3-815189116-3587081081-2225730562-134748649-517842195-1560836879-2444240241-858498395
 logon_cap=S-1-15-3-2664559683-3984555773-3951455780-2774143311-388146908-3231209892-793332285-791810559
@@ -11,7 +14,7 @@ root=Machine/Software/Radius
 client() { bash /mnt/dev/native/client.sh "$@"; }
 group_sid=
 listing=$(lps group list)
-while read -r name rid gid members sid rest; do
+while read -r name _rid _gid _members sid rest; do
     [[ $name == household ]] && group_sid=$sid
 done <<< "$listing"
 [[ $group_sid == S-1-* ]] || exit 1

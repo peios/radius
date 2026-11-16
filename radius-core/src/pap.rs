@@ -47,6 +47,6 @@ pub(crate) fn credentials(bytes: &[u8]) -> Result<Option<Credentials>, Error> {
     let end = password.iter().rposition(|b| *b != 0).map_or(0, |n| n + 1);
     Ok(Some(Credentials {
         username: username.to_vec(),
-        password: Zeroizing::new(password[..end].to_vec()),
+        proof: crate::Credential::Password(Zeroizing::new(password[..end].to_vec())),
     }))
 }

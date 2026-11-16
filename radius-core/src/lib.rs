@@ -7,11 +7,13 @@
 
 mod engine;
 mod pap;
+mod peap;
 mod ttls;
 pub mod wire;
 
 pub use engine::{
-    Admission, Binding, Client, Credentials, Engine, Limits, Outcome, Reply, Verification,
+    Admission, Binding, Client, Credential, Credentials, Engine, Limits, Method, Outcome, Reply,
+    Verification,
 };
 pub use ttls::server_config;
 

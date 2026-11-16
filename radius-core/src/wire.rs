@@ -232,11 +232,11 @@ pub(crate) fn response_with_reauthentication(
     Ok(out)
 }
 
-pub(crate) fn eap_request(id: u8, data: &[u8]) -> Result<Vec<u8>, Error> {
+pub(crate) fn eap_request_type(id: u8, kind: u8, data: &[u8]) -> Result<Vec<u8>, Error> {
     let len = u16::try_from(data.len() + 5).map_err(|_| Error::Limit)?;
     let mut packet = vec![1, id];
     packet.extend_from_slice(&len.to_be_bytes());
-    packet.push(21);
+    packet.push(kind);
     packet.extend_from_slice(data);
     Ok(packet)
 }

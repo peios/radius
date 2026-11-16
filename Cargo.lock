@@ -53,7 +53,7 @@ dependencies = [
 [[package]]
 name = "auth-abi"
 version = "0.0.24"
-source = "git+https://github.com/peios/authd.git?rev=e968145cef726274cb560c663d93b82e475e11ba#e968145cef726274cb560c663d93b82e475e11ba"
+source = "git+https://github.com/peios/authd.git?rev=ea3c9f90c48052ff0c0757d88032c9c706964b9a#ea3c9f90c48052ff0c0757d88032c9c706964b9a"
 
 [[package]]
 name = "autocfg"
@@ -378,7 +378,7 @@ dependencies = [
 [[package]]
 name = "peios-auth"
 version = "0.0.24"
-source = "git+https://github.com/peios/authd.git?rev=e968145cef726274cb560c663d93b82e475e11ba#e968145cef726274cb560c663d93b82e475e11ba"
+source = "git+https://github.com/peios/authd.git?rev=ea3c9f90c48052ff0c0757d88032c9c706964b9a#ea3c9f90c48052ff0c0757d88032c9c706964b9a"
 dependencies = [
  "auth-abi",
 ]

@@ -53,12 +53,21 @@ addresses do not establish user identity. Continuations retain their
 original client, source, and network binding. A changed secret, source
 trust definition, SSID, or listener set invalidates affected work.
 
-After PAP, one nonblocking authd operation belongs to the attempt. The
-adapter accepts one typed Password prompt and requires a final result
-that confirms Password verification. Unsupported prompts, repeated
-prompts, unavailable sources, and incomplete verification cannot grant
-access. A configurable concurrency limit rejects excess verification
-work without an unbounded queue.
+Each network's `AuthenticationMethods` is an ordered allowed-method
+list. Absence selects only `ttls-pap`; an explicit list can include
+`peap-mschapv2`. All methods share the network's Connect descriptor.
+Changing a method list invalidates that network's unfinished exchanges
+and cached replies. Enabling NT storage does not change network methods.
+
+One nonblocking authd operation belongs to each credential attempt. PAP
+uses one typed Password prompt and requires confirmed Password verification.
+PEAP requests MSCHAPv2, relays one source-issued challenge and typed
+response, and requires confirmed MSCHAPv2 verification with the protocol's
+server proof. radiusd receives no reusable NT hash. Unsupported or repeated
+prompts, unavailable sources, and incomplete verification cannot grant access.
+A configurable concurrency limit rejects excess verification work without
+an unbounded queue. NT storage and opportunistic password-side backfilling
+are documented with the local principal source, not configured by radiusd.
 
 Admission uses the verified SID, source groups, permitted typed claims,
 and explicit claim coverage. It does not reconstruct identity from a
@@ -115,17 +124,23 @@ raw peinit2 as PID 1 from an initial shell. Set service library search
 paths explicitly: peinit constructs service environments rather than
 inheriting the launching shell's environment.
 
-The share contains `native` with the three shell scripts; `bin` with
+The share contains `native` with the qualification shell scripts; `bin` with
 the independent `eapol_test` and matching OpenSSL runtime dependencies;
 and `credentials` with generated root.pem, server.der, intermediate.der,
 key.der, secret, and rotated-secret files. The existing interoperability
 certificate helper creates suitable development-only certificates.
 Secrets are development fixtures, never production credentials.
+For PEAP qualification, enable EAP-PEAP and EAP-MSCHAPV2 in the independent
+supplicant. The supplied builder enables both. An OpenSSL 3 build can also
+need its matching legacy provider for the supplicant's MD4 operation;
+place `legacy.so` beside the test executable. radiusd does not use that
+provider.
 
 ```sh
 export PEIOS_DISPOSABLE_RADIUS_TEST=yes
 bash /mnt/dev/native/setup.sh
 bash /mnt/dev/native/qualify.sh
+bash /mnt/dev/native/mschapv2.sh
 ```
 
 The independent supplicant runs inside the guest against loopback UDP.
@@ -135,6 +150,10 @@ radio link are simulated. The scripts check both TLS versions, matching
 MPPE keys, account and policy denials, restricted-claim uncertainty,
 invalid-configuration recovery, secret rotation, and source failure.
 They capture supplicant output privately because it can contain keys.
+The MSCHAPv2 sequence also checks method negotiation, both NT controls,
+opportunistic backfilling, password changes, and password eligibility.
+Set `RADIUS_DEV_RUNTIME=1` when using the replaceable raw-binary layout
+at `/lcl/radius-dev/current` rather than copying binaries into `/lcl`.
 
 The optional `native-events` Cargo example reads the two fixture CPU
 rings as the guest administrator. Start it before `qualify.sh`, wait
@@ -150,7 +169,9 @@ invalidation, and cancellation. Native SDK tests cover typed claims,
 known absence, and missing device or audit context.
 
 Passing these checks is development evidence, not a production release
-or a complete security audit. Real UniFi hardware, mobile onboarding,
-roaming, and AP reauthentication remain unqualified. Before expanding
-the initial feature set, replace the temporary userspace checker with
-the planned kernel API and add generic public Registry read snapshots.
+or a complete security audit. Real UniFi/iPhone TTLS/PAP connectivity has
+been demonstrated separately; PEAP hardware onboarding, roaming, and AP
+reauthentication enforcement need their own qualification. PEAP/MSCHAPv2
+is part of completing the MVP. After this extension, replace the temporary
+userspace checker with the planned kernel API and add generic public
+Registry read snapshots before further feature expansion.

@@ -10,8 +10,8 @@ packaging and real AP qualification are separate milestones.
 
 ## Responsibilities
 
-The core implements UDP RADIUS authentication, EAP-TTLSv0 and its inner
-PAP exchange. Rustls handles TLS; ring supplies its cryptographic
+The core implements UDP RADIUS authentication, EAP-TTLSv0/PAP and
+PEAPv0/EAP-MSCHAPv2. Rustls handles TLS; ring supplies its cryptographic
 primitives. RADIUS uses MD5 and HMAC-MD5 only where required by its wire
 format, through existing cryptographic libraries.
 
@@ -30,8 +30,8 @@ test identity. It is not a production backend or an installable service.
 ```mermaid
 flowchart TD
     A[Integrity-checked request] --> B[Bound EAP and TLS conversation]
-    B --> C[Inner PAP credentials]
-    C --> D[Verification event to integration]
+    B --> C[Inner password or source-bound MSCHAPv2 proof]
+    C --> D[Credential exchange with integration]
     D --> E[Verify identity and retain full subject]
     E --> F[Check current network admission]
     F -->|Granted| G[Success and Wi-Fi key delivery]
@@ -39,12 +39,13 @@ flowchart TD
 ```
 
 An outer identity such as `anonymous` introduces the EAP exchange. The
-inner username and password drive verification. The outer name grants
+inner username and credential proof drive verification. The outer name grants
 no user authority and need not match the inner name.
 
 `Engine::receive` returns a reply, a one-shot verification event or a
 drop. Credentials are owned by that event; its password buffer is
-erased on drop, and debug output is redacted. The Peios adapter
+erased on drop, and debug output is redacted. PEAP also returns a typed
+MSCHAPv2 response event after the source-issued challenge. The Peios adapter
 uses authd Authenticate and retains its verified identity, source groups
 and permitted claims on that same attempt. It then evaluates the
 network's Connect descriptor using the advisory access-check API.
@@ -69,10 +70,26 @@ unauthenticated datagrams are discarded without replies. Reply integrity
 includes both the Message-Authenticator and Response Authenticator.
 The original authenticated request determines key wrapping for its reply.
 
-Only TTLSv0/PAP is offered. Both TLS 1.2 and TLS 1.3 are supported, with
+TTLSv0/PAP supports both TLS 1.2 and TLS 1.3, with
 version-specific key derivation. TLS 1.2 uses the TTLS exporter label
 without context; TLS 1.3 uses the EAP key-material exporter with the TTLS
 type as context. Both request 128 bytes before splitting the result.
+
+PEAPv0/EAP-MSCHAPv2 uses TLS 1.2 in this initial compatibility slice,
+with the `client EAP encryption` exporter label. The core relays a
+source-issued challenge and the client's response, without receiving
+the password or reusable NT hash. It sends the exchange-specific server
+proof only after authentication and admission succeed. Final success
+and Wi-Fi key delivery wait for the MSCHAPv2 success acknowledgment and
+the tunneled Result TLV acknowledgment, followed by another current
+network-admission check. Cryptographic credential checking belongs to
+authd's principal source. PEAP cryptobinding extensions and TLS 1.3 for
+PEAP are not implemented in this slice.
+
+Each network has an ordered allowed-method list. Negotiation can select
+an allowed, untried alternative before TLS begins; a credential failure
+does not cause method fallback. Existing networks default to TTLS/PAP
+only. EAP-TLS and method-specific admission rules remain future work.
 
 Full authentication is required each time. Session storage, ticket
 resumption, and early data are disabled. Ordinary TLS server defaults

@@ -224,6 +224,27 @@ audit requirements fail closed. The temporary userspace checker creates no
 kernel token and cannot impersonate the user. Source groups are used as
 returned by authd, without inventing local-session or built-in memberships.
 
+--- machine\software\radius\networks\<network> authenticationmethods
+canonical: Machine\Software\Radius\Networks\<network> AuthenticationMethods
+type: REG_MULTI_SZ
+default: ttls-pap
+valid: 1–2 unique entries from ttls-pap, peap-mschapv2
+applies: live (method-list edits invalidate unfinished exchanges and cached replies)
+
+Ordered authentication methods permitted on the network.
+
+The first method is proposed initially. Remaining methods are alternatives
+during negotiation, without cycling back through rejected methods or
+automatically switching after failed authentication. Every method uses
+the same ConnectSecurity descriptor. Absence preserves TTLS/PAP-only
+behavior; an empty, duplicate or unknown list makes configuration invalid.
+
+`peap-mschapv2` uses PEAPv0 with TLS 1.2 and EAP-MSCHAPv2 inside. The
+credential source must permit password authentication and have compatible
+NT material. Source storage policy does not enable a network method.
+`ttls-pap` retains its TLS 1.2 and TLS 1.3 support. EAP-TLS is not yet an
+implemented method and is rejected as an unknown entry.
+
 --- machine\software\radius\networks\<network> reauthenticateseconds
 canonical: Machine\Software\Radius\Networks\<network> ReauthenticateSeconds
 type: REG_DWORD

@@ -35,6 +35,7 @@ impl Reason {
 }
 pub enum Progress<S> {
     Waiting,
+    Mschapv2Challenge([u8; 16]),
     Complete(S),
     Failed(Reason),
 }
@@ -44,6 +45,16 @@ pub trait Backend {
     fn begin(&mut self, verification: Verification) -> Result<Self::Work, Reason>;
     /// Must make bounded, nonblocking progress. Drop cancels unfinished work.
     fn step(&mut self, work: &mut Self::Work) -> Progress<Self::Subject>;
+    fn mschapv2_response(
+        &mut self,
+        _work: &mut Self::Work,
+        _response: &[u8; 40],
+    ) -> Result<(), Reason> {
+        Err(Reason::Credentials)
+    }
+    fn mschapv2_success(&self, _subject: &Self::Subject) -> Option<[u8; 20]> {
+        None
+    }
     fn admission(&mut self, subject: &Self::Subject, security: &[u8]) -> Result<(), Reason>;
     fn identity<'a>(&self, subject: &'a Self::Subject) -> (&'a str, &'a [u8]);
 }
@@ -63,6 +74,7 @@ pub trait Output {
     fn discarded(&mut self) {}
 }
 struct Attempt<W, S> {
+    challenge: Option<[u8; 16]>,
     listener: usize,
     binding: Binding,
     username: Option<String>,
@@ -171,7 +183,10 @@ impl<B: Backend> Driver<B> {
             secret: &client.secret,
             policy_generation: policy,
         };
-        match self.engine.receive(now, peer, context, bytes) {
+        match self
+            .engine
+            .receive_with_methods(now, peer, context, bytes, &selected.1.methods)
+        {
             Ok(Outcome::Reply(reply)) => {
                 // A pending reload must not replay an old Access-Accept.
                 if reply.bytes[0] == 2 && !self.ready {
@@ -180,6 +195,7 @@ impl<B: Backend> Driver<B> {
                 if let Some(id) = reply_state(&reply.bytes) {
                     if self.engine.has_attempt(&id) {
                         self.attempts.entry(id).or_insert(Attempt {
+                            challenge: None,
                             listener,
                             binding,
                             username: None,
@@ -226,6 +242,20 @@ impl<B: Backend> Driver<B> {
                     }
                 }
             }
+            Ok(Outcome::Mschapv2Response { id, response }) => {
+                if let Some(attempt) = self.attempts.get_mut(&id) {
+                    let result = attempt
+                        .work
+                        .as_mut()
+                        .ok_or(Reason::Credentials)
+                        .and_then(|work| self.backend.mschapv2_response(work, &response));
+                    if let Err(reason) = result {
+                        attempt.work = None;
+                        attempt.result = Some(Err(reason));
+                    }
+                }
+            }
+            Ok(Outcome::Drop) => {}
             _ => output.discarded(),
         }
     }
@@ -253,6 +283,9 @@ impl<B: Backend> Driver<B> {
             if let Some(work) = attempt.work.as_mut() {
                 match self.backend.step(work) {
                     Progress::Waiting => {}
+                    Progress::Mschapv2Challenge(challenge) => {
+                        attempt.challenge = Some(challenge);
+                    }
                     Progress::Complete(subject) => {
                         attempt.work = None;
                         attempt.result = Some(Ok(subject));
@@ -263,7 +296,18 @@ impl<B: Backend> Driver<B> {
                     }
                 }
             }
-            if !self.ready || attempt.result.is_none() {
+            if self.ready {
+                if let Some(challenge) = attempt.challenge.take() {
+                    match self.engine.mschapv2_challenge(now, id, challenge) {
+                        Ok(reply) if output.send(attempt.listener, &reply) => {}
+                        _ => {
+                            // Exact retransmission may still deliver a cached
+                            // challenge. Keep the fixed conversation deadlines.
+                        }
+                    }
+                }
+            }
+            if !self.ready || attempt.result.is_none() || !self.engine.pending_reply(&id) {
                 self.attempts.insert(id, attempt);
                 continue;
             }
@@ -286,7 +330,7 @@ impl<B: Backend> Driver<B> {
                     self.config.fingerprint[..8].try_into().unwrap(),
                 ),
             };
-            let reply = self.engine.finish_with_reauthentication(
+            let reply = self.engine.finish_with_protocol(
                 now,
                 id,
                 context,
@@ -298,7 +342,19 @@ impl<B: Backend> Driver<B> {
                     Admission::Denied
                 },
                 Some(network.reauthenticate_seconds),
+                result
+                    .as_ref()
+                    .ok()
+                    .and_then(|subject| self.backend.mschapv2_success(subject)),
             );
+            if self.engine.has_attempt(&id) {
+                if let Ok(reply) = reply {
+                    output.send(attempt.listener, &reply);
+                }
+                attempt.result = Some(result);
+                self.attempts.insert(id, attempt);
+                continue;
+            }
             if self.completed.len() >= self.config.limits.cached_replies {
                 if let Some(oldest) = self
                     .completed

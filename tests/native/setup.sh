@@ -2,7 +2,13 @@
 # Fixture only: replaces machine authentication policy in a disposable guest.
 set -euo pipefail
 [[ ${PEIOS_DISPOSABLE_RADIUS_TEST:-} == yes ]] || { echo 'Requires a fresh disposable guest.' >&2; exit 2; }
-export PATH=/lcl/bin:$PATH LD_LIBRARY_PATH=/lcl/lib
+runtime=/lcl
+daemon_dir=/lcl/sbin
+if [[ ${RADIUS_DEV_RUNTIME:-0} == 1 ]]; then
+    runtime=/lcl/radius-dev/current
+    daemon_dir=$runtime/bin
+fi
+export PATH=$runtime/bin:$PATH LD_LIBRARY_PATH=$runtime/lib
 policy=Machine/Generic/Authn/Policy
 radius_sid=S-1-5-80-1653768611-2164381495-1902105107-3452022516-881820819
 lpsd_sid=S-1-5-80-4242895835-3884168475-4287610261-1596539771-2019494472
@@ -26,12 +32,12 @@ for name in secret server.der intermediate.der key.der; do
     cp "/mnt/dev/credentials/$name" "/var/state/radius/secrets/$name"
 done
 svctl definition create authd --set ImagePath=/bin/bash --set Arguments=-c \
-    --set 'Arguments=export LD_LIBRARY_PATH=/lcl/lib; exec /lcl/sbin/authd >/run/authd.log 2>&1' \
+    --set "Arguments=export LD_LIBRARY_PATH=$runtime/lib; exec $daemon_dir/authd >/run/authd.log 2>&1" \
     --set Identity=SYSTEM --set Readiness=Notify --set Provides=authn \
     --set RequiredPrivileges=SeChangeNotifyPrivilege --set RequiredPrivileges=SeCreateTokenPrivilege \
     --set RequiredPrivileges=SeTcbPrivilege --set RequiredPrivileges=SeRestorePrivilege --set RequiredPrivileges=SeAuditPrivilege
 svctl definition create lpsd --set ImagePath=/bin/bash --set Arguments=-c \
-    --set 'Arguments=export LD_LIBRARY_PATH=/lcl/lib; exec /lcl/sbin/lpsd' --set Identity=Service \
+    --set "Arguments=export LD_LIBRARY_PATH=$runtime/lib; exec $daemon_dir/lpsd" --set Identity=Service \
     --set RuntimeDirectories=lpsd --set Requires=authd --set Readiness=Notify \
     --set RequiredPrivileges=SeChangeNotifyPrivilege --set RequiredPrivileges=SeAuditPrivilege
 svctl start lpsd
@@ -43,7 +49,7 @@ lps group add dev-radius household
 lps claim set dev-radius Department string Engineering
 group_sid=
 group_listing=$(lps group list)
-while read -r name rid gid members sid description; do
+while read -r name _rid _gid _members sid _description; do
     if [[ $name == household ]]; then group_sid=$sid; fi
 done <<< "$group_listing"
 [[ $group_sid == S-1-* ]] || { echo 'Missing fixture group SID.' >&2; exit 1; }
@@ -74,7 +80,7 @@ for key in "$root" "$root/Settings" "$root/TLS" "$root/Clients" "$root/Clients/a
     reg sd "$key" --set "O:SYG:SYD:P(A;OICI;GA;;;SY)(A;OICI;GR;;;${radius_sid})"
 done
 svctl definition create radiusd --set ImagePath=/bin/bash --set Arguments=-c \
-    --set 'Arguments=export LD_LIBRARY_PATH=/lcl/lib; exec /lcl/sbin/radiusd >/run/radiusd/output 2>&1' \
+    --set "Arguments=export LD_LIBRARY_PATH=$runtime/lib; exec $daemon_dir/radiusd >/run/radiusd/output 2>&1" \
     --set Identity=Service --set RuntimeDirectories=radiusd --set Requires=lpsd --set Readiness=Notify \
     --set RequiredPrivileges=SeChangeNotifyPrivilege --set RequiredPrivileges=SeAuditPrivilege
 svctl start radiusd

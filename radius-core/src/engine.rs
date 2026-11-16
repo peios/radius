@@ -79,9 +79,41 @@ impl Limits {
 
 /// Password bytes are erased on drop. Debug formatting never exposes either
 /// field. A production adapter owns any additional credential-conversation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    TtlsPap,
+    PeapMschapv2,
+}
+impl Method {
+    pub fn eap_type(self) -> u8 {
+        match self {
+            Self::TtlsPap => 21,
+            Self::PeapMschapv2 => 25,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::TtlsPap => "ttls-pap",
+            Self::PeapMschapv2 => "peap-mschapv2",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ttls-pap" => Some(Self::TtlsPap),
+            "peap-mschapv2" => Some(Self::PeapMschapv2),
+            _ => None,
+        }
+    }
+}
+
+pub enum Credential {
+    Password(Zeroizing<Vec<u8>>),
+    /// Begin a source-issued challenge; no password is available to radiusd.
+    Mschapv2,
+}
 pub struct Credentials {
     pub username: Vec<u8>,
-    pub password: Zeroizing<Vec<u8>>,
+    pub proof: Credential,
 }
 impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -116,6 +148,7 @@ pub struct Reply {
 pub enum Outcome {
     Reply(Reply),
     Verify(Verification),
+    Mschapv2Response { id: [u8; 16], response: [u8; 40] },
     Drop,
 }
 
@@ -139,6 +172,9 @@ struct Pending {
     secret: Zeroizing<Vec<u8>>,
 }
 struct Attempt {
+    method: Method,
+    offered: Vec<Method>,
+    negotiated: bool,
     binding: Binding,
     secret_tag: [u8; 32],
     station: Option<Vec<u8>>,
@@ -234,6 +270,26 @@ impl Engine {
         client: Client<'_>,
         bytes: &[u8],
     ) -> Result<Outcome, Error> {
+        self.receive_with_methods(now, peer, client, bytes, &[Method::TtlsPap])
+    }
+
+    pub fn receive_with_methods(
+        &mut self,
+        now: Instant,
+        peer: SocketAddr,
+        client: Client<'_>,
+        bytes: &[u8],
+        methods: &[Method],
+    ) -> Result<Outcome, Error> {
+        if methods.is_empty()
+            || methods.len() > 2
+            || methods
+                .iter()
+                .enumerate()
+                .any(|(i, m)| methods[..i].contains(m))
+        {
+            return Err(Error::Configuration);
+        }
         self.expire(now);
         if peer.ip() != client.binding.source
             || client.secret.len() < 16
@@ -304,13 +360,16 @@ impl Engine {
                 &request.authenticator,
                 client.secret,
                 11,
-                &wire::eap_request(next, &[0x20])?,
+                &wire::eap_request_type(next, methods[0].eap_type(), &[0x20])?,
                 Some(id),
                 None,
             )?;
             self.attempts.insert(
                 id,
                 Attempt {
+                    method: methods[0],
+                    offered: vec![methods[0]],
+                    negotiated: false,
                     binding: client.binding,
                     secret_tag,
                     station: request.station.map(<[u8]>::to_vec),
@@ -319,7 +378,11 @@ impl Engine {
                     idle: self.limits.idle,
                     overall: self.limits.overall,
                     expected_eap_id: next,
-                    tunnel: Tunnel::new(self.tls.clone(), self.limits.frame_payload)?,
+                    tunnel: Tunnel::new_method(
+                        self.tls.clone(),
+                        self.limits.frame_payload,
+                        methods[0],
+                    )?,
                     pending: None,
                 },
             );
@@ -348,7 +411,34 @@ impl Engine {
             return Ok(Outcome::Drop);
         }
         attempt.touched = now;
-        let step = if eap[4] == 21 {
+        if eap[4] == 3 && !attempt.negotiated {
+            if let Some(method) = methods
+                .iter()
+                .find(|m| eap[5..].contains(&m.eap_type()) && !attempt.offered.contains(m))
+                .copied()
+            {
+                attempt.method = method;
+                attempt.offered.push(method);
+                attempt.tunnel =
+                    Tunnel::new_method(self.tls.clone(), self.limits.frame_payload, method)?;
+                let next = eap[1].wrapping_add(1);
+                attempt.expected_eap_id = next;
+                let reply = wire::response(
+                    request.identifier,
+                    &request.authenticator,
+                    client.secret,
+                    11,
+                    &wire::eap_request_type(next, method.eap_type(), &[0x20])?,
+                    Some(id),
+                    None,
+                )?;
+                self.attempts.insert(id, attempt);
+                self.remember(now, key, reply.clone());
+                return Ok(Outcome::Reply(Reply { peer, bytes: reply }));
+            }
+        }
+        attempt.negotiated = true;
+        let step = if eap[4] == attempt.method.eap_type() && methods.contains(&attempt.method) {
             attempt.tunnel.step(&eap[5..])
         } else {
             Err(Error::Protocol)
@@ -370,6 +460,28 @@ impl Engine {
                     binding,
                 }))
             }
+            Ok(Step::Mschapv2Response(response)) => {
+                attempt.pending = Some(Pending {
+                    key,
+                    radius_id: request.identifier,
+                    request_auth: request.authenticator,
+                    eap_id: eap[1],
+                    secret: Zeroizing::new(client.secret.to_vec()),
+                });
+                self.attempts.insert(id, attempt);
+                Ok(Outcome::Mschapv2Response { id, response })
+            }
+            Ok(Step::Complete) => {
+                attempt.pending = Some(Pending {
+                    key,
+                    radius_id: request.identifier,
+                    request_auth: request.authenticator,
+                    eap_id: eap[1],
+                    secret: Zeroizing::new(client.secret.to_vec()),
+                });
+                self.attempts.insert(id, attempt);
+                Ok(Outcome::Drop)
+            }
             Ok(Step::Send(data)) => {
                 let next = eap[1].wrapping_add(1);
                 attempt.expected_eap_id = next;
@@ -378,7 +490,7 @@ impl Engine {
                     &request.authenticator,
                     client.secret,
                     11,
-                    &wire::eap_request(next, &data)?,
+                    &wire::eap_request_type(next, attempt.method.eap_type(), &data)?,
                     Some(id),
                     None,
                 )?;
@@ -425,6 +537,51 @@ impl Engine {
         admission: Admission,
         reauthenticate_seconds: Option<u32>,
     ) -> Result<Reply, Error> {
+        self.finish_with_protocol(now, id, current, admission, reauthenticate_seconds, None)
+    }
+
+    pub fn pending_reply(&self, id: &[u8; 16]) -> bool {
+        self.attempts
+            .get(id)
+            .is_some_and(|attempt| attempt.pending.is_some())
+    }
+
+    pub fn mschapv2_challenge(
+        &mut self,
+        now: Instant,
+        id: [u8; 16],
+        challenge: [u8; 16],
+    ) -> Result<Reply, Error> {
+        self.expire(now);
+        let mut attempt = self.attempts.remove(&id).ok_or(Error::UnknownAttempt)?;
+        let pending = attempt.pending.take().ok_or(Error::Protocol)?;
+        let data = attempt.tunnel.mschapv2_challenge(challenge)?;
+        let next = pending.eap_id.wrapping_add(1);
+        attempt.expected_eap_id = next;
+        let bytes = wire::response(
+            pending.radius_id,
+            &pending.request_auth,
+            &pending.secret,
+            11,
+            &wire::eap_request_type(next, attempt.method.eap_type(), &data)?,
+            Some(id),
+            None,
+        )?;
+        let peer = pending.key.peer;
+        self.attempts.insert(id, attempt);
+        self.remember(now, pending.key, bytes.clone());
+        Ok(Reply { peer, bytes })
+    }
+
+    pub fn finish_with_protocol(
+        &mut self,
+        now: Instant,
+        id: [u8; 16],
+        current: Client<'_>,
+        admission: Admission,
+        reauthenticate_seconds: Option<u32>,
+        mschapv2_success: Option<[u8; 20]>,
+    ) -> Result<Reply, Error> {
         if reauthenticate_seconds == Some(0) {
             return Err(Error::Configuration);
         }
@@ -441,6 +598,25 @@ impl Engine {
         let mut pending = attempt.pending.take().ok_or(Error::Protocol)?;
         pending.key.policy = current.policy_generation;
         let granted = admission == Admission::Granted;
+        if granted && attempt.method == Method::PeapMschapv2 && !attempt.tunnel.peap_complete() {
+            let success = mschapv2_success.ok_or(Error::Protocol)?;
+            let data = attempt.tunnel.mschapv2_success(success)?;
+            let next = pending.eap_id.wrapping_add(1);
+            attempt.expected_eap_id = next;
+            let bytes = wire::response(
+                pending.radius_id,
+                &pending.request_auth,
+                &pending.secret,
+                11,
+                &wire::eap_request_type(next, attempt.method.eap_type(), &data)?,
+                Some(id),
+                None,
+            )?;
+            let peer = pending.key.peer;
+            self.attempts.insert(id, attempt);
+            self.remember(now, pending.key, bytes.clone());
+            return Ok(Reply { peer, bytes });
+        }
         let msk = if granted {
             Some(attempt.tunnel.msk()?)
         } else {

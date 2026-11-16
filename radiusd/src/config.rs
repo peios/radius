@@ -1,4 +1,4 @@
-use radius_core::{Binding, Limits};
+use radius_core::{Binding, Limits, Method};
 use ring::digest::{digest, SHA256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -72,6 +72,7 @@ pub struct Client {
     pub networks: Vec<String>,
 }
 pub struct Network {
+    pub methods: Vec<Method>,
     pub ssid: Vec<u8>,
     /// Validated native self-relative SD; never a replacement ACL language.
     pub security: Vec<u8>,
@@ -144,6 +145,13 @@ impl Config {
                 || network.security.is_empty()
                 || network.security.len() > 65536
                 || network.reauthenticate_seconds == 0
+                || network.methods.is_empty()
+                || network.methods.len() > 2
+                || network
+                    .methods
+                    .iter()
+                    .enumerate()
+                    .any(|(i, m)| network.methods[..i].contains(m))
             {
                 return Err("invalid network");
             }
@@ -203,6 +211,9 @@ impl Config {
         if let Some(network) = self.networks.get(network) {
             material.extend_from_slice(&(network.ssid.len() as u32).to_be_bytes());
             material.extend_from_slice(&network.ssid);
+            for method in &network.methods {
+                material.push(method.eap_type());
+            }
         }
         for prefix in &client.addresses {
             material.extend_from_slice(format!("{}/{},", prefix.address, prefix.bits).as_bytes());

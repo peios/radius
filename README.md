@@ -7,10 +7,11 @@ library, the native Peios `radiusd` daemon, and a separate loopback-only
 The native adapter uses authd Authenticate without a local logon, reads normal
 Registry configuration, checks the network's current Connect SD through
 libpeios, and emits operational events. This is a development milestone;
-packaging and real UniFi/client qualification remain separate work.
+packaging and broader hardware qualification remain separate work. The
+TTLS/PAP path has passed a real UniFi/iPhone trial.
 
 The core implements UDP RADIUS authentication with mandatory request integrity,
-EAP-TTLSv0/PAP using Rustls/ring and explicit admission before success or key
+EAP-TTLSv0/PAP and PEAPv0/EAP-MSCHAPv2 using Rustls/ring, with explicit admission before success or key
 delivery. It owns bounded, short-lived conversations rather than hours-long
 Wi-Fi sessions. See the [technical reference](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/1--architecture.md).
 
@@ -54,8 +55,9 @@ interoperability runner. No target builds an image, kernel or `pkgs/` package.
 
 The integration adapter supplies trusted-client/network context derived from
 configuration and the actual packet source. The protocol core cannot establish
-that trust from NAS attributes. After inner PAP it returns a `Verification`
-event, and the integration retains the full verified subject for that attempt.
+that trust from NAS attributes. It returns inner credentials or a source-bound
+MSCHAPv2 response to the integration, which retains the full verified subject
+for that attempt. Reusable NT hashes stay inside the credential source.
 `Engine::finish` requires an explicit admission result and current binding;
 credential success alone is insufficient.
 
@@ -71,7 +73,12 @@ For native configuration and disposable-guest qualification, see
 For an offline VM with persistent state and replaceable raw binaries, see
 [Persistent Development VM](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/4--development-vm.md).
 
-Accounting, proxying, additional EAP methods, resumption, and application SSO are
+The disposable native `tests/native/mschapv2.sh` gate covers PEAP and TTLS
+coexistence, source verification, password changes, and the NT storage and
+backfill controls. PEAP uses TLS 1.2; TTLS supports TLS 1.2 and 1.3. PEAP
+onboarding on an actual iPhone remains to be qualified.
+
+Accounting, proxying, further EAP methods, resumption, and application SSO are
 outside this slice. The later kernel-backed advisory API and public read-only
 Registry snapshot milestone remains required before expanding the initial
 home-Wi-Fi feature set.

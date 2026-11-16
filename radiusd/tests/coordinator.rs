@@ -39,7 +39,10 @@ impl Backend for Fake {
     type Work = Work;
     type Subject = ();
     fn begin(&mut self, v: Verification) -> Result<Work, Reason> {
-        assert_eq!(&*v.credentials.password, b"password");
+        let radius_core::Credential::Password(password) = &v.credentials.proof else {
+            panic!("expected PAP");
+        };
+        assert_eq!(&**password, b"password");
         self.calls.set(self.calls.get() + 1);
         Ok(Work {
             ready: self.ready.clone(),
@@ -134,6 +137,7 @@ fn setup_peers() -> (Setup, ClientConnection) {
         networks: BTreeMap::from([(
             "home".into(),
             Network {
+                methods: vec![radius_core::Method::TtlsPap],
                 ssid: b"Home".to_vec(),
                 security: vec![1],
                 reauthenticate_seconds: 3600,
@@ -531,6 +535,7 @@ fn conflicting_client_prefix_or_network_ssid_is_rejected() {
     config.networks.insert(
         "alias".into(),
         Network {
+            methods: vec![radius_core::Method::TtlsPap],
             ssid: b"Home".to_vec(),
             security: vec![1],
             reauthenticate_seconds: 3600,

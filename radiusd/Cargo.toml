@@ -17,7 +17,7 @@ zeroize.workspace = true
 libc = { version = "0.2", optional = true }
 socket2 = { version = "0.6", optional = true }
 peios = { git = "https://github.com/peios/peios-rs.git", rev = "3950d35950c46cb3538885b7cf05bde059393def", optional = true }
-peios-auth = { git = "https://github.com/peios/authd.git", rev = "e968145cef726274cb560c663d93b82e475e11ba", optional = true }
+peios-auth = { git = "https://github.com/peios/authd.git", rev = "ea3c9f90c48052ff0c0757d88032c9c706964b9a", optional = true }
 
 [dev-dependencies]
 rcgen = { version = "=0.14.9", default-features = false, features = ["ring", "crypto"] }

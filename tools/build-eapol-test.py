@@ -36,7 +36,8 @@ def main():
             source.extractall(directory, filter="data")
         work = directory / "wpa_supplicant-2.12" / "wpa_supplicant"
         (work / ".config").write_text("CONFIG_EAPOL_TEST=y\nCONFIG_IEEE8021X_EAPOL=y\n"
-                                     "CONFIG_EAP_TLS=y\nCONFIG_EAP_TTLS=y\nCONFIG_TLS=openssl\n"
+                                     "CONFIG_EAP_TLS=y\nCONFIG_EAP_TTLS=y\nCONFIG_EAP_PEAP=y\n"
+                                     "CONFIG_EAP_MSCHAPV2=y\nCONFIG_TLS=openssl\n"
                                      "CONFIG_CTRL_IFACE=y\nCFLAGS += -std=gnu11\n")
         subprocess.run(["make", f"-j{args.jobs}", "eapol_test"], cwd=work, check=True)
         shutil.copy2(work / "eapol_test", destination)

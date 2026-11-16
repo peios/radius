@@ -74,18 +74,18 @@ and explicit claim coverage. It does not reconstruct identity from a
 later username lookup or invent local-session group memberships.
 For example, grant Connect to a source's household group SID. An
 Everyone ACE matches only when that membership is supplied; the adapter
-does not add it. Hidden claims remain unknown. Missing context, device
+does not add it. Hidden claims remain unknown. Missing context, device,
 or local execution requirements deny admission. The stateless kernel query
 conveys no token authority. An older kernel fails admission with
-`kernel-api-unavailable`; other query errors use `access-check-error`, independently
-of wrong credentials and an ordinary policy denial. There is no userspace
-evaluator fallback.
+`kernel-api-unavailable`; other query errors use `access-check-error`,
+independently of wrong credentials and an ordinary policy denial. There is no
+userspace evaluator fallback.
 
-Each check supplies the stable Registry network ID and SSID display label in an
-`AuditContext` of kind `network`. Invalid UTF-8 in the label is replaced with
-U+FFFD; policy binding still uses the original SSID bytes. The fields are defined
-as asserted values in radiusd's event catalogue fragment. Matching SACL audit
-ACEs produce `kacs.audit.subject.checked`
+Each check supplies the stable Registry network ID and SSID display label in
+an `AuditContext` of kind `network`. Invalid UTF-8 in the label is replaced
+with U+FFFD; policy binding still uses the original SSID bytes. The fields are
+defined as asserted values in radiusd's event catalog fragment. Matching SACL
+audit ACEs produce `kacs.audit.subject.checked`
 when radiusd holds enabled `SeAuditPrivilege`. The event identifies radiusd's
 real caller identity separately from the supplied, hypothetical user SID.
 Audit preparation errors fail admission. radiusd's own admission events remain
@@ -108,14 +108,15 @@ assembled configuration before resuming. Certificate-only renewal
 changes new TLS exchanges while existing bounded exchanges continue.
 
 The loader copies Registry configuration through one short read-only
-transaction, including key resolution, enumeration, values and layer selection.
+transaction, including key resolution, enumeration, values, and layer
+selection.
 It releases the snapshot before opening credential files. Capture races and
 other read errors discard the complete candidate; the worker retries on its
 normal reload cycle and keeps admission paused while configuration is invalid.
 Watches and fingerprints detect changes but do not establish read consistency.
 Prepare protected immutable credential files, then transactionally switch
-references. Keep old files until safely unused; a Registry transaction does not
-snapshot filesystem contents.
+references. Keep old files until safely unused; a Registry transaction does
+not snapshot filesystem contents.
 
 `radiusd.evman` defines operational exchange and configuration events.
 The inner supplied username is explicitly unverified input; canonical

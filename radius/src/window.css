@@ -1,0 +1,30 @@
+/* Keep the shared settings layout; only RADIUS-specific controls need rules. */
+.st pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.st code {
+    overflow-wrap: anywhere;
+}
+.radius-record {
+    margin-bottom: var(--space-4);
+}
+.st-row:has(textarea) {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 1fr);
+    align-items: start;
+    padding-block: var(--space-3);
+}
+.radius-choices {
+    display: grid;
+    gap: var(--space-2);
+}
+.radius-choices label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+@media (max-width: 600px) {
+    .st-row:has(textarea) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

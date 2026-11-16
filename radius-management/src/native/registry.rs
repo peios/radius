@@ -37,6 +37,21 @@ fn values(key: &Key, transaction: &Transaction) -> io::Result<Values> {
 }
 /// One short read-only Registry snapshot; no credential-file I/O inside it.
 pub fn read() -> io::Result<Stored> {
+    let mut retries = 3;
+    loop {
+        match read_once() {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock && retries > 0 => {
+                // A concurrent writer can prevent acquiring a snapshot. Drop
+                // the entire attempted view before retrying; never combine
+                // records from different snapshots or retry a mutation here.
+                retries -= 1;
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            result => return result,
+        }
+    }
+}
+fn read_once() -> io::Result<Stored> {
     let transaction = Transaction::begin_read_only().map_err(io::Error::from)?;
     let mut stored = Stored {
         settings: values(

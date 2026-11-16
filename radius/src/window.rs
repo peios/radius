@@ -46,6 +46,33 @@ const SECTIONS: [(&str, &str, Glyph); 5] = [
     ("profile", "Authentication Profiles", Glyph::Key),
     ("identity", "Server Identities", Glyph::Certificate),
 ];
+fn section_tile(section: &str) -> Tile {
+    match section {
+        "overview" => Tile::Blue,
+        "client" => Tile::Teal,
+        "policy" => Tile::Violet,
+        "profile" => Tile::Orange,
+        "identity" => Tile::Green,
+        _ => Tile::Slate,
+    }
+}
+fn section_about(section: &str) -> &'static str {
+    match section {
+        "client" => "Devices that send authentication requests to this server.",
+        "policy" => "Who may connect, and which authentication profile each network uses.",
+        "profile" => "Reusable authentication methods and server identities.",
+        "identity" => "Certificates this server presents when devices connect.",
+        _ => "RADIUS authentication and admission on this machine.",
+    }
+}
+fn listeners(stored: &Result<Stored, String>) -> String {
+    stored
+        .as_ref()
+        .ok()
+        .and_then(|s| s.settings.get("Listen"))
+        .map(field_text)
+        .unwrap_or_default()
+}
 fn read() -> Result<Stored, String> {
     registry::read().map_err(|e| e.to_string())
 }
@@ -135,6 +162,31 @@ fn affected(stored: &Stored, record: &Record) -> String {
     }
 }
 impl Window {
+    fn heard(&mut self, stored: Result<Stored, String>, fields: &mut Fields) {
+        // Follow external changes only while the field still holds the saved value.
+        // Polling and unrelated actions must not replace an administrator's draft.
+        if fields.get("listeners") == listeners(&self.stored) {
+            fields.set("listeners", &listeners(&stored));
+        }
+        self.stored = stored;
+    }
+    fn section_summary(&self, section: &str) -> String {
+        if section == "overview" {
+            return match self.overview["daemon"].as_str() {
+                Some("active") => "Running".into(),
+                Some("stopped") => "Stopped".into(),
+                Some("invalid") => "Configuration needs attention".into(),
+                _ => "Status unavailable".into(),
+            };
+        }
+        match (&self.stored, Kind::parse(section)) {
+            (Ok(stored), Some(kind)) => {
+                let count = stored.objects.iter().filter(|r| r.kind == kind).count();
+                format!("{count} configured")
+            }
+            _ => "Unavailable".into(),
+        }
+    }
     fn launch(&mut self, action: Action) {
         if self.busy {
             return;
@@ -151,7 +203,7 @@ impl Window {
             if let Some(surface) = surface.upgrade() {
                 surface.update(move |w, fields| {
                     w.busy = false;
-                    w.stored = stored;
+                    w.heard(stored, fields);
                     w.overview = overview;
                     match result {
                         Ok(Outcome::Saved(record)) => {
@@ -257,7 +309,7 @@ impl Window {
                     }
                 }
                 options.push_str(r#"<input type="hidden" name="Policies">"#);
-                options
+                format!(r#"<div class="radius-choices">{options}</div>"#)
             } else if *field == "AuthenticationMethods" {
                 settings::select(
                     field,
@@ -300,7 +352,7 @@ impl Window {
             !self.busy,
         ));
         let mut page = format!(
-            r#"<form fx-submit="save">{}{}</form>"#,
+            r#"<form class="radius-record" fx-submit="save">{}{}</form>"#,
             settings::group("Configuration", &rows, ""),
             settings::actions(&controls)
         );
@@ -372,16 +424,19 @@ impl Window {
             ));
             page.push_str(&settings::group(
                 "Actions",
-                &settings::actions(&controls),
+                &settings::more(settings::More::Form, &settings::actions(&controls)),
                 "",
             ));
         }
         if let Some(secret) = &self.secret {
             page.push_str(&settings::group(
                 "Shared Secret",
-                &format!(
-                    "<p>Select and copy this value:</p><code>{}</code>",
-                    escape(secret)
+                &settings::more(
+                    settings::More::Form,
+                    &format!(
+                        "<p>Select and copy this value:</p><code>{}</code>",
+                        escape(secret)
+                    ),
                 ),
                 "",
             ));
@@ -389,7 +444,10 @@ impl Window {
         if let Some(info) = &self.inspection {
             page.push_str(&settings::group(
                 "Certificates",
-                &format!("<pre>{}</pre>", escape(info)),
+                &settings::more(
+                    settings::More::Form,
+                    &format!("<pre>{}</pre>", escape(info)),
+                ),
                 "",
             ));
         }
@@ -397,10 +455,17 @@ impl Window {
     }
     fn overview_page(&self) -> String {
         let mut rows = String::new();
-        rows.push_str(&settings::fact(
-            "Daemon",
-            self.overview["daemon"].as_str().unwrap_or("Unknown"),
-            false,
+        let daemon = self.overview["daemon"].as_str().unwrap_or("unknown");
+        let (status, tone) = match daemon {
+            "active" => ("Running", settings::Tone::Good),
+            "invalid" => ("Needs attention", settings::Tone::Bad),
+            "stopped" => ("Stopped", settings::Tone::Plain),
+            _ => ("Unavailable", settings::Tone::Warn),
+        };
+        rows.push_str(&settings::row(
+            "RADIUS Server",
+            "Handles new authentication requests.",
+            &settings::pill(status, tone),
         ));
         rows.push_str(&settings::fact(
             "Service",
@@ -409,14 +474,23 @@ impl Window {
                 .unwrap_or("Unavailable or not permitted"),
             false,
         ));
-        rows.push_str(&settings::fact(
+        rows.push_str(&settings::row(
             "Start at Boot",
-            match self.overview["start_at_boot"].as_bool() {
-                Some(true) => "Yes",
-                Some(false) => "No",
-                None => "Unavailable or not permitted",
+            "Start the server automatically when this machine starts.",
+            &match self.overview["start_at_boot"].as_bool() {
+                Some(on) => settings::button(
+                    if on {
+                        "Disable at Boot"
+                    } else {
+                        "Enable at Boot"
+                    },
+                    "boot",
+                    &[("on", if on { "0" } else { "1" })],
+                    Button::Plain,
+                    !self.busy,
+                ),
+                None => settings::value("Unavailable or not permitted", false),
             },
-            false,
         ));
         let same = self.overview["saved_fingerprint"].is_string()
             && self.overview["saved_fingerprint"]
@@ -445,21 +519,10 @@ impl Window {
                 !self.busy,
             ));
         }
-        controls.push_str(&settings::button(
-            "Enable at Boot",
-            "boot",
-            &[("on", "1")],
-            Button::Plain,
-            !self.busy,
+        rows.push_str(&settings::more(
+            settings::More::Form,
+            &settings::actions(&controls),
         ));
-        controls.push_str(&settings::button(
-            "Disable at Boot",
-            "boot",
-            &[("on", "0")],
-            Button::Plain,
-            !self.busy,
-        ));
-        rows.push_str(&settings::actions(&controls));
         let mut page = settings::group("Service", &rows, "");
         if self.overview["configuration_error_code"] == "not-found" {
             page.push_str(&settings::group(
@@ -501,24 +564,27 @@ impl Window {
                 page.push_str(&settings::note(error));
             }
         }
-        let listen = self
-            .stored
-            .as_ref()
-            .ok()
-            .and_then(|s| s.settings.get("Listen"))
-            .map(field_text)
-            .unwrap_or_default();
+        let listen = listeners(&self.stored);
         let settings_form = format!(
-            r#"<form fx-submit="listeners">{}{}{}</form>"#,
-            settings::row(
-                "Listen Addresses",
-                "Local IP addresses and UDP ports, one per line.",
-                &list("listeners", "Listen Addresses", !self.busy)
-            ),
-            settings::submit("Save", Button::Primary, !self.busy),
-            settings::note(&format!("Currently saved: {listen}"))
+            r#"<form fx-submit="listeners">{}</form>"#,
+            settings::group(
+                "Listeners",
+                &format!(
+                    "{}{}",
+                    settings::row(
+                        "Listen Addresses",
+                        "Local IP addresses and UDP ports, one per line.",
+                        &list("listeners", "Listen Addresses", !self.busy)
+                    ),
+                    settings::more(
+                        settings::More::Form,
+                        &settings::actions(&settings::submit("Save", Button::Primary, !self.busy))
+                    )
+                ),
+                &settings::note(&format!("Currently saved: {listen}"))
+            )
         );
-        page.push_str(&settings::group("Listeners", &settings_form, ""));
+        page.push_str(&settings_form);
         page
     }
     fn permissions(&mut self, connect: bool) {
@@ -653,9 +719,9 @@ impl Live for Window {
                 Nav::Section(Section {
                     id,
                     title,
-                    now: String::new(),
+                    now: self.section_summary(id),
                     glyph: *glyph,
-                    tile: Tile::Slate,
+                    tile: section_tile(id),
                 })
             })
             .collect();
@@ -665,21 +731,24 @@ impl Live for Window {
             .unwrap();
         let mut page = settings::head(
             title.2,
-            Tile::Slate,
+            section_tile(self.section),
             title.1,
-            "RADIUS authentication and admission on this machine.",
+            section_about(self.section),
         );
         if let Some(pending) = &self.pending {
             page.push_str(&settings::group(
                 "Confirm Change",
-                &format!(
-                    "<p>{}</p>{}",
-                    escape(&pending.description),
-                    settings::actions(&format!(
-                        "{}{}",
-                        settings::button("Cancel", "cancel", &[], Button::Plain, true),
-                        settings::button("Confirm", "confirm", &[], Button::Danger, !self.busy)
-                    ))
+                &settings::more(
+                    settings::More::Asking,
+                    &format!(
+                        "<p>{}</p>{}",
+                        escape(&pending.description),
+                        settings::actions(&format!(
+                            "{}{}",
+                            settings::button("Cancel", "cancel", &[], Button::Plain, true),
+                            settings::button("Confirm", "confirm", &[], Button::Danger, !self.busy)
+                        ))
+                    ),
                 ),
                 "",
             ));
@@ -692,15 +761,12 @@ impl Live for Window {
         } else if let Some(record) = &self.edit {
             page.push_str(&self.form(record));
         } else if let Some(kind) = Kind::parse(self.section) {
-            page.push_str(&settings::actions(&settings::button(
-                "Create…",
-                "create",
-                &[],
-                Button::Primary,
-                !self.busy,
-            )));
+            let mut rows = settings::row(
+                "Add Configuration",
+                "Create a new object in this section.",
+                &settings::button("Create…", "create", &[], Button::Primary, !self.busy),
+            );
             if let Ok(stored) = &self.stored {
-                let mut rows = String::new();
                 for r in stored.objects.iter().filter(|r| r.kind == kind) {
                     rows.push_str(&settings::row(
                         r.name(),
@@ -988,10 +1054,7 @@ pub fn open() -> i32 {
         }
     };
     settings::stylesheet(&mut app);
-    app.stylesheet(
-        "/radius.css",
-        ".st pre{white-space:pre-wrap;overflow-wrap:anywhere}.st code{overflow-wrap:anywhere}",
-    );
+    app.stylesheet("/radius.css", include_str!("window.css"));
     let surface = app.live(
         "RADIUS",
         Window {
@@ -1011,7 +1074,10 @@ pub fn open() -> i32 {
         },
     );
     let weak = Arc::downgrade(&surface);
-    surface.update(|w, _| w.surface = weak.clone());
+    surface.update(|w, fields| {
+        w.surface = weak.clone();
+        fields.set("listeners", &listeners(&w.stored));
+    });
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(3));
         let Some(surface) = weak.upgrade() else {
@@ -1019,9 +1085,9 @@ pub fn open() -> i32 {
         };
         let stored = read();
         let overview = overview();
-        surface.update(|w, _| {
+        surface.update(|w, fields| {
             if !w.busy {
-                w.stored = stored;
+                w.heard(stored, fields);
                 w.overview = overview;
             }
         });
@@ -1060,6 +1126,36 @@ mod tests {
         r.values
             .insert("ConnectSecurity".into(), Value::Text("O:BAG:BAD:P".into()));
         r
+    }
+    #[test]
+    fn listener_refresh_follows_saved_changes_without_overwriting_a_draft() {
+        let mut w = window();
+        w.stored
+            .as_mut()
+            .unwrap()
+            .settings
+            .insert("Listen".into(), Value::List(vec!["127.0.0.1:1812".into()]));
+        let mut fields = Fields::default();
+        fields.set("listeners", &listeners(&w.stored));
+        assert_eq!(fields.get("listeners"), "127.0.0.1:1812");
+        let mut changed = w.stored.clone();
+        changed
+            .as_mut()
+            .unwrap()
+            .settings
+            .insert("Listen".into(), Value::List(vec!["0.0.0.0:1812".into()]));
+        w.heard(changed, &mut fields);
+        assert_eq!(fields.get("listeners"), "0.0.0.0:1812");
+        fields.set("listeners", "192.0.2.1:1812");
+        let mut changed_again = w.stored.clone();
+        changed_again
+            .as_mut()
+            .unwrap()
+            .settings
+            .insert("Listen".into(), Value::List(vec!["127.0.0.1:18120".into()]));
+        w.heard(changed_again, &mut fields);
+        assert_eq!(fields.get("listeners"), "192.0.2.1:1812");
+        assert_eq!(listeners(&w.stored), "127.0.0.1:18120");
     }
     #[test]
     fn all_five_areas_render_and_invalid_configuration_remains_visible() {

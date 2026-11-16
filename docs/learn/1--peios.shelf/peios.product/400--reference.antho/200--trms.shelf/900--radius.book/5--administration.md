@@ -20,6 +20,11 @@ for a remote CLI; a GXWI desktop can present the window remotely.
 The window has five areas: Overview, Clients, Access Policies,
 Authentication Profiles, and Server Identities.
 
+Overview's listener field starts with the saved addresses. Background
+refreshes follow external changes while the field is unchanged, preserving
+an edit in progress. The saved value shown below the field remains separate
+from the draft.
+
 | Object | Purpose |
 |---|---|
 | Client | Source addresses, shared secret, and allowed policies |

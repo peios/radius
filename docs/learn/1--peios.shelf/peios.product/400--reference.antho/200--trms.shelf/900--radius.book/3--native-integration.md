@@ -30,6 +30,10 @@ privileges. `SeChangeNotifyPrivilege` permits ordinary path traversal;
 port-reservation descriptor grants its service SID PORT_BIND for each
 configured listening port. Use peinit's Notify readiness mode.
 
+Packet admission is separate from the port reservation. When packet filtering
+is enabled, allow inbound UDP for each configured RADIUS listener. GXWI's
+inbound TCP rule does not also admit RADIUS authentication traffic.
+
 The default AuthenticationSecurity descriptor grants this service
 ReadGroups and ReadClaim across the namespace. Authenticate remains a
 separate capability grant. Administrators can use ordinary claim object

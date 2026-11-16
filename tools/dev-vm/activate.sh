@@ -25,26 +25,38 @@ else
 fi
 # Resolve dependencies before stopping any running service. Build/source ABI
 # compatibility remains the caller's responsibility; checksums are not an ABI test.
-for program in peinit2 svctl authd lpsd lps radiusd; do
+programs=(peinit2 svctl authd lpsd lps radiusd)
+if [[ -e $runtime/sets/$selected/bin/netd || -e $runtime/sets/$selected/bin/net || -e $runtime/sets/$selected/lib/libnetd.so.1 ]]; then
+    [[ -f $runtime/sets/$selected/bin/netd && -f $runtime/sets/$selected/bin/net && -f $runtime/sets/$selected/lib/libnetd.so.1 ]]
+    programs+=(netd net)
+fi
+for program in "${programs[@]}"; do
     /lib64/ld-linux-x86-64.so.2 --library-path "$runtime/sets/$selected/lib" \
         --list "$runtime/sets/$selected/bin/$program" > /dev/null
 done
 [[ ! -e $runtime/current.next && ! -L $runtime/current.next ]] || exit 1
 ctl=$runtime/current/bin/svctl
 had_radius=no
+had_netd=no
 if [[ $mode == update ]]; then
     export LD_LIBRARY_PATH=$runtime/current/lib
+    if [[ $("$ctl" status netd 2>/dev/null) == *'netd: active'* ]]; then
+        [[ -f $runtime/sets/$selected/bin/netd ]] || { echo 'active networking requires a network runtime set' >&2; exit 1; }
+        had_netd=yes
+    fi
     if [[ $("$ctl" status radiusd 2>/dev/null) == *'radiusd: active'* ]]; then
         had_radius=yes
         "$ctl" stop radiusd
     fi
     "$ctl" stop lpsd
     "$ctl" stop authd
+    [[ $had_netd == no ]] || "$ctl" stop netd
 fi
 ln -s "sets/$selected" "$runtime/current.next"
 mv -Tf "$runtime/current.next" "$runtime/current"
 if [[ $mode == update ]]; then
     export LD_LIBRARY_PATH=$runtime/current/lib
+    [[ $had_netd == no ]] || "$ctl" start netd
     "$ctl" start lpsd
     [[ $had_radius == no ]] || "$ctl" start radiusd
     echo 'RADIUS DEV VM: services restarted; running PID 1 changes on the next boot'

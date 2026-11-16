@@ -19,6 +19,30 @@ spec.loader.exec_module(vm)
 
 
 class Preservation(unittest.TestCase):
+    def test_network_identity_cannot_be_regenerated_accidentally(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = argparse.Namespace(vm=root, bridge="br-test", tap="tap-test")
+            with contextlib.redirect_stdout(io.StringIO()):
+                vm.configure_lan(args)
+            original = (root / "network.json").read_bytes()
+            with self.assertRaises(FileExistsError):
+                vm.configure_lan(args)
+            self.assertEqual((root / "network.json").read_bytes(), original)
+
+    def test_partial_network_runtime_is_not_published(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "share/sets").mkdir(parents=True)
+            source = root / "input"
+            for file in (*vm.FILES, "bin/netd"):
+                path = source / file
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(file.encode())
+            with self.assertRaisesRegex(SystemExit, "network runtime requires"):
+                vm.stage(argparse.Namespace(vm=root, name="partial", source=source))
+            self.assertEqual(list((root / "share/sets").iterdir()), [])
+
     def test_stopping_launcher_reaps_its_child(self):
         with tempfile.TemporaryDirectory() as directory:
             pid_file = Path(directory) / "child.pid"

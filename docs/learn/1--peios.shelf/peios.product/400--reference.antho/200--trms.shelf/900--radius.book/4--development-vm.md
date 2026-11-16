@@ -3,10 +3,11 @@ title: Persistent Development VM
 description: Persistent machine state and replaceable raw binaries for offline RADIUS development.
 ---
 
-The helper under `tools/dev-vm` runs an offline virtual machine (VM) with
+The helper under `tools/dev-vm` runs a virtual machine (VM) with
 persistent machine state. Raw component binaries remain separately
-replaceable. The helper runs no package or kernel builds and creates no
-host network interface.
+replaceable. The helper runs no package or kernel builds. Offline boot is
+the default; optional LAN boot attaches a temporary network interface to
+an existing host bridge.
 
 ## Boot and storage
 
@@ -61,6 +62,12 @@ reported outputs into a directory with these entries:
 | `lib/libauth.so.1` | authd: `libauth` |
 | `lib/libpeios.so.0` | peios-sdk: `libpeios` |
 
+LAN development adds `bin/netd`, `bin/net`, and `lib/libnetd.so.1`, built
+with netd's raw `netd`, `net`, and `libnetd` targets. Stage all three
+together. Partial network sets are rejected before publication. Once a
+VM has a saved network attachment, every boot requires these files,
+including offline boots, because its service definition persists.
+
 Use matching SDK and authd revisions. The helper checks complete files,
 checksums, and guest loader dependencies; those checks do not prove ABI
 compatibility. Build-cache warnings about mismatched imported source
@@ -81,7 +88,7 @@ ordinary boot messages and the console shell.
 
 ## Updating development binaries
 
-Stage every update under a different set name. Staging copies all eight
+Stage every update under a different set name. Staging copies every required
 files before publishing the set and does not alter the running VM.
 Existing set names cannot be overwritten.
 
@@ -92,8 +99,10 @@ bash /mnt/dev/activate.sh update-name
 ```
 
 Activation copies and verifies the set before stopping services. It stops
-radiusd if active, then lpsd and authd; switches the selected set; starts
-lpsd and its authd dependency; and restarts radiusd if it was active.
+radiusd if active, then lpsd and authd, and netd if active. It switches the
+selected set, restarts netd if needed, starts lpsd and its authd dependency,
+and restarts radiusd if it was active. A set that omits network binaries
+cannot replace a running netd.
 Service definitions must use `/lcl/radius-dev/current/bin` and explicitly
 select `/lcl/radius-dev/current/lib` for library loading. Running PID 1
 changes only on the next boot. Select the desired set in the next host
@@ -110,6 +119,78 @@ Shut down through the matching control tool:
 LD_LIBRARY_PATH=/lcl/radius-dev/current/lib \
     /lcl/radius-dev/current/bin/svctl shutdown poweroff
 ```
+
+## LAN attachment
+
+LAN mode requires a separately configured persistent Ethernet bridge on
+the host, NetworkManager, and permission to control network connections.
+The launcher never moves the host's physical Ethernet configuration.
+Preparing or changing the bridge is a separate administrative action;
+preserve the host's addressing identity and prepare a rollback before
+activating that change.
+
+Save a stable virtual MAC address and the bridge/TAP names once:
+
+```sh
+python3 radius/tools/dev-vm/vm.py --vm local/radius-dev-vm \
+    configure-lan --bridge br-peios
+```
+
+This command writes `network.json` beside the state image. It refuses an
+existing file, so ordinary setup cannot replace the virtual MAC. The
+configuration belongs to this VM and should accompany its state disk.
+
+Configure the guest's `radius-dev-lan` netd profile and a matching
+interface rule through the ordinary network registry settings. Static
+addressing requires the address/prefix, gateway, and DNS settings; it
+does not require a DHCP reservation. Do not copy addresses from another
+network into this profile.
+
+Stage a complete runtime set containing the network programs and library.
+Boot it offline first to provision the service:
+
+```sh
+python3 radius/tools/dev-vm/vm.py --vm local/radius-dev-vm run lan-initial
+```
+
+In the guest, apply the prepared profile and rule, then run:
+
+```sh
+bash /mnt/dev/provision-network.sh
+```
+
+The provisioning helper creates the persistent netd state directory if
+absent and configures the ordinary SYSTEM netd service using the raw
+executable. It preserves existing network profiles and rules. An existing
+netd definition retains its unrelated settings. The service starts at
+boot and publishes network readiness through its normal control APIs.
+
+For a VM prepared by an earlier helper version, copy the updated
+`activate.sh` and `provision-network.sh` into its host `share` directory
+before provisioning. No initramfs or kernel rebuild is required.
+
+After a clean shutdown, boot with the LAN attachment:
+
+```sh
+python3 radius/tools/dev-vm/vm.py --vm local/radius-dev-vm \
+    run lan-initial --lan
+```
+
+The launcher creates a temporary NetworkManager TAP profile owned by the
+invoking user and connects it to the configured bridge. QEMU uses that
+TAP and the saved virtual MAC. Existing TAP names are rejected. Shutdown
+or a failed QEMU launch removes the temporary profile and device while
+leaving the host bridge in place. The profile is not saved to disk.
+
+Check `net status` in the guest for the matched profile, saved address,
+gateway, and routed readiness. Check reachability from another LAN
+machine. Routed readiness reports configured state; it does not prove
+that the gateway or a remote service answers. The host must remain
+connected after the VM shuts down and its TAP disappears.
+
+LAN attachment does not expand radiusd's trusted-client configuration or
+replace the offline fixture's deny-all network policy. Real AP clients,
+certificates, and network admission require separate provisioning.
 
 ## Offline qualification fixture
 

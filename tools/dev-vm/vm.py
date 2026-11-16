@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Persistent, isolated RADIUS development VM; never builds packages or a kernel."""
+"""Persistent RADIUS development VM with optional LAN attachment."""
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import signal
 import subprocess
 import tempfile
+import uuid
 
 
 FILES = (
     "bin/peinit2", "bin/svctl", "bin/authd", "bin/lpsd", "bin/lps",
     "bin/radiusd", "lib/libpeios.so.0", "lib/libauth.so.1",
 )
+NETWORK_FILES = ("bin/netd", "bin/net", "lib/libnetd.so.1")
 HERE = Path(__file__).resolve().parent
 
 
@@ -28,10 +33,11 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def run_vm(command):
-    def stop(signum, _frame):
-        raise SystemExit(128 + signum)
+def stop(signum, _frame):
+    raise SystemExit(128 + signum)
 
+
+def run_vm(command):
     previous = signal.signal(signal.SIGTERM, stop)
     process = None
     try:
@@ -54,6 +60,49 @@ def name(value):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", value):
         raise argparse.ArgumentTypeError("use a simple set name, up to 64 characters")
     return value
+
+
+def interface_name(value):
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,14}", value):
+        raise argparse.ArgumentTypeError("use an interface name of at most 15 characters")
+    return value
+
+
+def configure_lan(args):
+    configuration = {"bridge": args.bridge, "tap": args.tap,
+                     "mac": "52:54:00:" + ":".join(f"{v:02x}" for v in secrets.token_bytes(3))}
+    with (args.vm.resolve(strict=True) / "network.json").open("x") as output:
+        output.write(json.dumps(configuration, indent=2) + "\n")
+    print("Saved the VM's stable virtual MAC and host attachment; host networking is unchanged.")
+
+
+@contextmanager
+def lan_attachment(vm):
+    configuration = json.loads((vm / "network.json").read_text())
+    bridge = interface_name(configuration["bridge"])
+    tap = interface_name(configuration["tap"])
+    mac = configuration["mac"]
+    if not re.fullmatch(r"52:54:00(:[0-9a-f]{2}){3}", mac):
+        raise SystemExit("invalid VM MAC address")
+    if not (Path("/sys/class/net") / bridge / "bridge").is_dir():
+        raise SystemExit(f"host bridge is unavailable: {bridge}")
+    if (Path("/sys/class/net") / tap).exists():
+        raise SystemExit(f"TAP name is already in use: {tap}")
+    identifier = str(uuid.uuid4())
+    created = False
+    try:
+        run("nmcli", "connection", "add", "save", "no", "type", "tun",
+            "con-name", f"peios-vm-{identifier}", "connection.uuid", identifier,
+            "ifname", tap, "mode", "tap", "owner", str(os.getuid()),
+            "controller", bridge, "port-type", "bridge", "connection.autoconnect", "no",
+            "tun.pi", "no", "tun.vnet-hdr", "no")
+        created = True
+        run("nmcli", "--wait", "15", "connection", "up", "uuid", identifier)
+        yield ["-netdev", f"tap,id=lan,ifname={tap},script=no,downscript=no,vnet_hdr=off",
+               "-device", f"virtio-net-pci,netdev=lan,mac={mac}"]
+    finally:
+        if created:
+            run("nmcli", "--wait", "15", "connection", "delete", "uuid", identifier)
 
 
 def archive(files):
@@ -110,7 +159,8 @@ def prepare(args):
         (boot / "source.json").write_text(json.dumps(metadata, indent=2) + "\n")
         boot.rename(target)
     (vm / "share" / "sets").mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(HERE / "activate.sh", vm / "share" / "activate.sh")
+    for helper in ["activate.sh", "provision-network.sh"]:
+        shutil.copyfile(HERE / helper, vm / "share" / helper)
     print(f"Prepared boot assets in {target}; source ISO unchanged.")
 
 
@@ -130,18 +180,22 @@ def stage(args):
     if target.exists():
         raise SystemExit("set already exists; stage updates under a new name")
     # Validate the whole input before making anything visible to the VM.
-    for relative in FILES:
+    network = [file for file in NETWORK_FILES if (source / file).is_file()]
+    if network and len(network) != len(NETWORK_FILES):
+        raise SystemExit("network runtime requires netd, net, and libnetd together")
+    files = (*FILES, *network)
+    for relative in files:
         if not (source / relative).is_file():
             raise SystemExit(f"missing runtime file: {relative}")
     with tempfile.TemporaryDirectory(prefix=".stage-", dir=sets) as scratch:
         scratch = Path(scratch)
         result = scratch / args.name
-        for relative in FILES:
+        for relative in files:
             target_file = result / relative
             target_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source / relative, target_file)
             target_file.chmod(0o755 if relative.startswith("bin/") else 0o644)
-        manifest = "".join(f"{digest(result / relative)}  {relative}\n" for relative in FILES)
+        manifest = "".join(f"{digest(result / relative)}  {relative}\n" for relative in files)
         (result / "SHA256SUMS").write_text(manifest)
         result.rename(target)
     print(f"Staged {args.name}; the running VM is unchanged.")
@@ -156,6 +210,11 @@ def boot(args):
         raise SystemExit("required state disk is missing; run create-state explicitly")
     if not (vm / "share" / "sets" / args.name / "SHA256SUMS").is_file():
         raise SystemExit("selected runtime set is missing")
+    if args.lan and not (vm / "network.json").is_file():
+        raise SystemExit("save the VM attachment with configure-lan before a LAN boot")
+    if args.lan or (vm / "network.json").exists():
+        if any(not (vm / "share" / "sets" / args.name / file).is_file() for file in NETWORK_FILES):
+            raise SystemExit("configured networking requires a complete network runtime set")
     # Serialize boots: never share one state image or selection between VMs.
     import fcntl
     with (vm / "run.lock").open("w") as lock:
@@ -172,13 +231,17 @@ def boot(args):
         if args.initialize:
             cmdline += " radiusdev.initialize=1"
         command = ["qemu-system-x86_64", "-machine", "q35,accel=kvm:tcg", "-cpu", "max",
-                   "-m", "1536", "-smp", "2", "-nographic", "-no-reboot", "-nic", "none",
+                   "-m", "1536", "-smp", "2", "-nographic", "-no-reboot",
                    "-kernel", str(vm / "boot" / "kernel"), "-initrd", str(vm / "boot" / "initrd"),
                    "-append", cmdline, "-cdrom", metadata["iso"],
                    "-drive", f"if=virtio,format=raw,file={disk}",
                    "-virtfs", f"local,path={vm / 'share'},mount_tag=dev,security_model=none,readonly=on"]
         # Keep the lock open while QEMU runs; no daemon/background process.
-        run_vm(command)
+        if args.lan:
+            with lan_attachment(vm) as network:
+                run_vm([*command, *network])
+        else:
+            run_vm([*command, "-nic", "none"])
 
 
 def main():
@@ -189,6 +252,10 @@ def main():
     prepare_parser.add_argument("iso", type=Path)
     prepare_parser.set_defaults(function=prepare)
     commands.add_parser("create-state").set_defaults(function=create_state)
+    lan_parser = commands.add_parser("configure-lan")
+    lan_parser.add_argument("--bridge", type=interface_name, required=True)
+    lan_parser.add_argument("--tap", type=interface_name, default="tap-radius")
+    lan_parser.set_defaults(function=configure_lan)
     stage_parser = commands.add_parser("stage")
     stage_parser.add_argument("name", type=name)
     stage_parser.add_argument("source", type=Path)
@@ -196,8 +263,10 @@ def main():
     boot_parser = commands.add_parser("run")
     boot_parser.add_argument("name", type=name)
     boot_parser.add_argument("--initialize", action="store_true")
+    boot_parser.add_argument("--lan", action="store_true")
     boot_parser.set_defaults(function=boot)
     args = parser.parse_args()
+    signal.signal(signal.SIGTERM, stop)
     args.function(args)
 
 

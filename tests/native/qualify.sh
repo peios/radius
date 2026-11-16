@@ -46,7 +46,7 @@ reg del -y "$policy" AuthenticationSecurity
 client complete-known-absence 1.2
 reg set "$root/Networks/home" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})S:(AU;SA;0x1;;;${group_sid})"
 sleep 1
-client audit-requirement 1.2 dev-radius development-only-password reject
+client audit-requirement 1.2
 reg set "$root/Networks/home" ConnectSecurity "sz:O:SYG:SYD:(A;;0x1;;;${group_sid})"
 reg set "$root/Settings" MaxVerifications dword:0
 sleep 1

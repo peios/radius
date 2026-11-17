@@ -11,6 +11,7 @@ const GROUP: &str = "S-1-5-21-1-2-3-1001";
 fn subject() -> Authenticated {
     Authenticated {
         mschapv2_authenticator_response: None,
+        ntlmv2_session_key: None,
         identity: Record {
             sid: USER.parse::<Sid>().unwrap().as_bytes().to_vec(),
             name: "local\\jack".into(),
@@ -60,6 +61,10 @@ fn check(subject: &Authenticated, text: &str) -> Result<(), Reason> {
     )
 }
 
+#[test]
+fn bindings_accept_the_matching_library_abi() {
+    assert!(peios_auth::Client::new().is_ok(), "requires libauth ABI 6");
+}
 #[test]
 fn assignment_facts_preserve_authority_types_and_hide_disabled_deny_only_claims() {
     use radius_policy::Scalar;

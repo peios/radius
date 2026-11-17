@@ -59,7 +59,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "auth-abi"
 version = "0.0.24"
-source = "git+https://github.com/peios/authd.git?rev=5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652#5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652"
+source = "git+https://github.com/peios/authd.git?rev=b2b4d18ab639dac0e2990f3ccdd8e718d544b353#b2b4d18ab639dac0e2990f3ccdd8e718d544b353"
 
 [[package]]
 name = "autocfg"
@@ -858,7 +858,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "peinit2"
 version = "0.0.12"
-source = "git+https://github.com/peios/peinit.git?rev=0eb973544a96bbd1de6984198113ed5ab2bd98e7#0eb973544a96bbd1de6984198113ed5ab2bd98e7"
+source = "git+https://github.com/peios/peinit.git?rev=46edcacf644785e9cc5ad108402b6c6971993346#46edcacf644785e9cc5ad108402b6c6971993346"
 dependencies = [
  "jiff",
  "libc",
@@ -885,7 +885,7 @@ dependencies = [
 [[package]]
 name = "peios-auth"
 version = "0.0.24"
-source = "git+https://github.com/peios/authd.git?rev=5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652#5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652"
+source = "git+https://github.com/peios/authd.git?rev=b2b4d18ab639dac0e2990f3ccdd8e718d544b353#b2b4d18ab639dac0e2990f3ccdd8e718d544b353"
 dependencies = [
  "auth-abi",
 ]

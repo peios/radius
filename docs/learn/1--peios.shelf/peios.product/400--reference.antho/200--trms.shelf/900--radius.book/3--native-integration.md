@@ -21,6 +21,15 @@ The native Cargo feature links the matching public `libauth.so.1` and
 headers from pinned canonical source revisions. A development guest
 must load these matching libraries rather than older image copies.
 
+The current bindings require authd's PGSS version 6 protocol and libauth
+ABI 6. The shared-library filename remains `libauth.so.1`, so successful
+loader resolution alone does not establish compatibility; the bindings
+check the ABI when creating a client. Upgrade the daemon, matching library,
+peinit service-token client, and other authentication clients together.
+An older GXWI server or SSH bridge cannot authenticate against the new
+authd merely because radiusd has been rebuilt. RADIUS continues to request
+only password or MSCHAPv2 verification; this update adds no NTLM method.
+
 The service must be named `radiusd` and use `Identity=Service`. It
 checks its actual token user SID at startup. Trusted authd policy gives
 this account the `peios.auth.authenticate` capability. It receives no
@@ -51,7 +60,8 @@ reauthentication, and an authentication-profile reference. Profiles select
 ordered methods and a named server identity. Server identities reference an
 ordered DER certificate chain and matching protected DER private key.
 All records have stable GUID keys and independent display names. Schema
-version 2 requires explicit conversion from the earlier development layout.
+version 3 adds access profiles and nested assignment rules. Existing schema
+2 deployments require the explicit migration described in Administration.
 
 Most-specific source prefixes select the trusted client. There is no
 fallback to another secret. The integrity-checked Called-Station-Id must

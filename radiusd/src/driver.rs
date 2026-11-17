@@ -83,6 +83,11 @@ pub trait Backend {
         network: &Network,
     ) -> Result<(), Reason>;
     fn identity<'a>(&self, subject: &'a Self::Subject) -> (&'a str, &'a [u8]);
+    /// Authority-disclosed identity only; the driver adds verified client and
+    /// asserted request context separately.
+    fn policy_facts(&self, _subject: &Self::Subject) -> Result<radius_policy::Facts, Reason> {
+        Ok(radius_policy::Facts::new())
+    }
     /// None means pending background accounting work, never implicit success.
     fn accounting(
         &mut self,
@@ -103,6 +108,8 @@ pub struct Event<'a> {
     pub reason: Reason,
 }
 pub trait Output {
+    /// Operational diagnostics containing rule paths, never supplied facts.
+    fn policy_issue(&mut self, _id: &[u8; 16], _issue: &str) {}
     /// Submission to UDP is a delivery boundary, not proof the AP admitted Wi-Fi.
     fn send(&mut self, listener: usize, reply: &Reply) -> bool;
     fn event(&mut self, event: Event<'_>);
@@ -389,6 +396,45 @@ impl<B: Backend> Driver<B> {
                 Err(reason) => *reason,
             };
             let mut extras = AdmissionExtras::default();
+            let mut vlan = None;
+            if reason == Reason::Granted {
+                let assignment = self
+                    .backend
+                    .policy_facts(result.as_ref().unwrap())
+                    .and_then(|mut facts| {
+                        use radius_policy::Scalar;
+                        facts.insert(
+                            "Client.Id".into(),
+                            vec![Scalar::String(client.name.clone())],
+                        );
+                        facts.insert(
+                            "Client.Address".into(),
+                            vec![Scalar::Address(attempt.binding.source)],
+                        );
+                        facts.insert(
+                            "Request.SSID".into(),
+                            vec![Scalar::String(
+                                String::from_utf8(network.ssid.clone())
+                                    .map_err(|_| Reason::MissingContext)?,
+                            )],
+                        );
+                        if let Some(station) = attempt
+                            .station
+                            .as_deref()
+                            .and_then(radius_policy::station_mac)
+                        {
+                            facts.insert("Request.Station".into(), vec![Scalar::Mac(station)]);
+                        }
+                        network.access.assignment(&facts).map_err(|issue| {
+                            output.policy_issue(&id, &issue);
+                            Reason::Policy
+                        })
+                    });
+                match assignment {
+                    Ok(value) => vlan = value.vlan,
+                    Err(error) => reason = error,
+                }
+            }
             if reason == Reason::Granted && self.engine.final_admission(&id) {
                 match self.backend.accounting(
                     result.as_ref().unwrap(),
@@ -417,7 +463,7 @@ impl<B: Backend> Driver<B> {
                     self.config.fingerprint[..8].try_into().unwrap(),
                 ),
             };
-            let reply = self.engine.finish_with_accounting(
+            let reply = self.engine.finish_with_policy(
                 now,
                 id,
                 context,
@@ -440,6 +486,7 @@ impl<B: Backend> Driver<B> {
                     .ok()
                     .and_then(|subject| self.backend.mschapv2_success(subject)),
                 extras.class.as_deref(),
+                vlan,
             );
             if self.engine.has_attempt(&id) {
                 if let Ok(reply) = reply {

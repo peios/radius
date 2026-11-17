@@ -179,6 +179,76 @@ impl Backend for Auth {
     fn identity<'a>(&self, subject: &'a Authenticated) -> (&'a str, &'a [u8]) {
         (&subject.identity.name, &subject.identity.sid)
     }
+    fn policy_facts(&self, subject: &Authenticated) -> Result<radius_policy::Facts, Reason> {
+        policy_facts(subject)
+    }
+}
+
+fn policy_facts(identity: &Authenticated) -> Result<radius_policy::Facts, Reason> {
+    use radius_policy::{Facts, Scalar};
+    let sid = |b: &[u8]| {
+        SidRef::from_bytes(b)
+            .map(|s| Scalar::Sid(s.to_string()))
+            .ok_or(Reason::MissingContext)
+    };
+    let mut facts = Facts::new();
+    facts.claim_coverage = match identity.claim_coverage {
+        peios_auth::ClaimCoverage::Complete => radius_policy::ClaimCoverage::Complete,
+        peios_auth::ClaimCoverage::Filtered => radius_policy::ClaimCoverage::Filtered,
+        _ => return Err(Reason::MissingContext),
+    };
+    facts.absent_claims = identity
+        .absent_claims
+        .iter()
+        .map(|n| radius_policy::claim_name(n))
+        .collect();
+    facts.insert("Subject.User".into(), vec![sid(&identity.identity.sid)?]);
+    facts.insert(
+        "Subject.Name".into(),
+        vec![Scalar::String(identity.identity.name.clone())],
+    );
+    let Some(Field::References(groups)) = identity.identity.fields.get(&fields::GROUPS) else {
+        return Err(Reason::MissingContext);
+    };
+    facts.insert(
+        "Subject.Group".into(),
+        groups
+            .iter()
+            .map(|g| sid(&g.sid))
+            .collect::<Result<_, _>>()?,
+    );
+    let Some(Field::Claims(claims)) = identity.identity.fields.get(&fields::CLAIMS) else {
+        return Err(Reason::MissingContext);
+    };
+    for raw in claims {
+        let claim = convert_claim(raw)?;
+        // Like PNP's enabled-group facts, assignment facts must never turn
+        // disabled or deny-only authority data into grant-eligible values.
+        if claim
+            .flags
+            .intersects(ClaimAttr::DISABLED | ClaimAttr::USE_FOR_DENY_ONLY)
+        {
+            facts
+                .unknown_claims
+                .insert(radius_policy::claim_name(&claim.name));
+            continue;
+        }
+        let values = match claim.values {
+            ClaimValues::Int64(v) => v.into_iter().map(Scalar::Int64).collect(),
+            ClaimValues::Uint64(v) => v.into_iter().map(Scalar::Uint64).collect(),
+            ClaimValues::Boolean(v) => v.into_iter().map(Scalar::Boolean).collect(),
+            ClaimValues::String(v) => v.into_iter().map(Scalar::String).collect(),
+            ClaimValues::Sid(v) => v.into_iter().map(|s| Scalar::Sid(s.to_string())).collect(),
+            ClaimValues::Octet(v) => v.into_iter().map(Scalar::Octet).collect(),
+        };
+        if facts
+            .insert(format!("Subject.Claim.{}", claim.name), values)
+            .is_some()
+        {
+            return Err(Reason::MissingContext);
+        }
+    }
+    Ok(facts)
 }
 
 pub fn evaluate(

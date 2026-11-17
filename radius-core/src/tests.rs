@@ -14,6 +14,104 @@ use std::{
 
 const SECRET: &[u8] = b"test-radius-secret-at-least-16";
 
+#[test]
+fn vlan_assignment_is_atomic_tagged_consistently_and_integrity_protected() {
+    use md5::Digest;
+    let request_auth = [42; 16];
+    let reply = crate::wire::response_with_policy(
+        7,
+        &request_auth,
+        SECRET,
+        2,
+        &[3, 1, 0, 4],
+        None,
+        None,
+        Some(60),
+        Some(b"reference"),
+        Some(4094),
+    )
+    .unwrap();
+    let mut attributes = Vec::new();
+    let mut pos = 20;
+    while pos < reply.len() {
+        let len = reply[pos + 1] as usize;
+        attributes.push((reply[pos], reply[pos + 2..pos + len].to_vec()));
+        pos += len;
+    }
+    assert_eq!(
+        attributes
+            .iter()
+            .filter(|(k, _)| matches!(*k, 64 | 65 | 81))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            (64, vec![0, 0, 0, 13]),
+            (65, vec![0, 0, 0, 6]),
+            (81, b"\x004094".to_vec())
+        ]
+    );
+    let mut signed = reply.clone();
+    signed[4..20].copy_from_slice(&request_auth);
+    let expected_ma = signed[22..38].to_vec();
+    signed[22..38].fill(0);
+    let mut mac = Hmac::<Md5>::new_from_slice(SECRET).unwrap();
+    mac.update(&signed);
+    assert_eq!(expected_ma, mac.finalize().into_bytes().as_slice());
+    signed[22..38].copy_from_slice(&expected_ma);
+    let mut digest = Md5::new();
+    Digest::update(&mut digest, &signed);
+    Digest::update(&mut digest, SECRET);
+    assert_eq!(&reply[4..20], digest.finalize().as_slice());
+    for code in [3, 11] {
+        assert!(crate::wire::response_with_policy(
+            7,
+            &request_auth,
+            SECRET,
+            code,
+            &[4, 1, 0, 4],
+            None,
+            None,
+            None,
+            None,
+            Some(10)
+        )
+        .is_err());
+    }
+    for vlan in [0, 4095] {
+        assert!(crate::wire::response_with_policy(
+            7,
+            &request_auth,
+            SECRET,
+            2,
+            &[3, 1, 0, 4],
+            None,
+            None,
+            None,
+            None,
+            Some(vlan)
+        )
+        .is_err());
+    }
+    let reply = crate::wire::response_with_policy(
+        7,
+        &request_auth,
+        SECRET,
+        2,
+        &[3, 1, 0, 4],
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let mut pos = 20;
+    while pos < reply.len() {
+        assert!(!matches!(reply[pos], 64 | 65 | 81));
+        pos += reply[pos + 1] as usize;
+    }
+}
+
 fn attr(packet: &mut Vec<u8>, kind: u8, value: &[u8]) {
     packet.extend_from_slice(&[kind, (value.len() + 2) as u8]);
     packet.extend_from_slice(value);

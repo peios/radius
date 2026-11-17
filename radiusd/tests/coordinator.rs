@@ -164,6 +164,7 @@ fn setup_peers() -> (Setup, ClientConnection) {
         networks: BTreeMap::from([(
             "home".into(),
             Network {
+                access: access_policy(),
                 enabled: true,
                 tls: None,
                 tls_tag: [0; 32],
@@ -637,6 +638,7 @@ fn conflicting_client_prefix_or_network_ssid_is_rejected() {
     config.networks.insert(
         "alias".into(),
         Network {
+            access: access_policy(),
             enabled: true,
             tls: None,
             tls_tag: [0; 32],
@@ -763,4 +765,119 @@ fn changing_server_identity_cancels_an_in_progress_conversation() {
     assert_eq!(drops.get(), 1);
     assert!(out.replies.is_empty());
     assert_eq!(out.events[0].0, Reason::Binding);
+}
+
+fn access_policy() -> std::sync::Arc<radius_policy::Policy> {
+    let profile = radius_policy::Profile {
+        id: "11111111-1111-4111-8111-111111111111".into(),
+        name: "Default".into(),
+        enabled: true,
+        vlan: None,
+    };
+    let rule = radius_policy::RuleInput {
+        name: "default".into(),
+        values: std::collections::BTreeMap::from([(
+            "Actions".into(),
+            serde_json::json!([format!("ASSIGN({})", profile.id)]),
+        )]),
+        children: vec![],
+    };
+    std::sync::Arc::new(radius_policy::Policy::compile(&[rule], &[profile]).unwrap())
+}
+
+#[test]
+fn vlan_assignment_survives_signed_reply_retransmission_without_extra_accounting() {
+    let (mut config, tls, mut backend, _, _, _) = setup();
+    let profile = radius_policy::Profile {
+        id: "11111111-1111-4111-8111-111111111111".into(),
+        name: "Staff".into(),
+        enabled: true,
+        vlan: Some(20),
+    };
+    let rule = radius_policy::RuleInput {
+        name: "default".into(),
+        values: BTreeMap::from([(
+            "Actions".into(),
+            serde_json::json!([format!("ASSIGN({})", profile.id)]),
+        )]),
+        children: vec![],
+    };
+    config.networks.get_mut("home").unwrap().access =
+        Arc::new(radius_policy::Policy::compile(&[rule], &[profile]).unwrap());
+    let accounting_calls = Rc::new(Cell::new(0));
+    backend.accounting = Some((Rc::new(Cell::new(true)), accounting_calls.clone(), None));
+    let mut driver = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out {
+        deliver: true,
+        ..Default::default()
+    };
+    let now = Instant::now();
+    let last = pending(&mut driver, tls, &mut out, now);
+    driver.tick(now, &mut out);
+    let reply = out.replies.pop_front().unwrap();
+    assert_eq!(reply[0], 2);
+    let mut pos = 20;
+    let mut group = None;
+    while pos < reply.len() {
+        let len = reply[pos + 1] as usize;
+        if reply[pos] == 81 {
+            group = Some(reply[pos + 2..pos + len].to_vec());
+        }
+        pos += len;
+    }
+    assert_eq!(group, Some(b"\x0020".to_vec()));
+    assert_eq!(accounting_calls.get(), 1);
+    driver.receive(now, 0, peer(), &last, &mut out);
+    assert_eq!(out.replies.pop_front().unwrap(), reply);
+    assert_eq!(accounting_calls.get(), 1);
+}
+
+#[test]
+fn profile_conflict_refuses_before_accounting_reservation() {
+    let (mut config, tls, mut backend, _, _, _) = setup();
+    let profiles = [
+        radius_policy::Profile {
+            id: "11111111-1111-4111-8111-111111111111".into(),
+            name: "A".into(),
+            enabled: true,
+            vlan: Some(10),
+        },
+        radius_policy::Profile {
+            id: "22222222-2222-4222-8222-222222222222".into(),
+            name: "B".into(),
+            enabled: true,
+            vlan: Some(20),
+        },
+    ];
+    let rules = profiles
+        .iter()
+        .map(|p| radius_policy::RuleInput {
+            name: p.name.clone(),
+            values: BTreeMap::from([(
+                "Actions".into(),
+                serde_json::json!([format!("ASSIGN({})", p.id)]),
+            )]),
+            children: vec![],
+        })
+        .collect::<Vec<_>>();
+    config.networks.get_mut("home").unwrap().access =
+        Arc::new(radius_policy::Policy::compile(&rules, &profiles).unwrap());
+    let accounting_calls = Rc::new(Cell::new(0));
+    backend.accounting = Some((Rc::new(Cell::new(true)), accounting_calls.clone(), None));
+    let mut driver = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out {
+        deliver: true,
+        ..Default::default()
+    };
+    let now = Instant::now();
+    pending(&mut driver, tls, &mut out, now);
+    driver.tick(now, &mut out);
+    let reply = out.replies.pop_front().unwrap();
+    assert_eq!(reply[0], 3);
+    assert_eq!(accounting_calls.get(), 0);
+    let mut pos = 20;
+    while pos < reply.len() {
+        assert!(!matches!(reply[pos], 25 | 26 | 64 | 65 | 81));
+        pos += reply[pos + 1] as usize;
+    }
 }

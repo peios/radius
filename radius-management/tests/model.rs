@@ -24,7 +24,10 @@ fn list(s: &[&str]) -> Value {
 }
 fn setup() -> Stored {
     Stored {
-        settings: Values::from([("SchemaVersion".into(), Value::Number(2))]),
+        settings: Values::from([(
+            "SchemaVersion".into(),
+            Value::Number(radius_management::model::SCHEMA),
+        )]),
         issues: vec![],
         objects: vec![
             record(

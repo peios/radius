@@ -44,7 +44,7 @@ policy=$root/AccessPolicies/22222222-2222-4222-8222-222222222222
 profile=$root/AuthenticationProfiles/33333333-3333-4333-8333-333333333333
 identity=$root/ServerIdentities/44444444-4444-4444-8444-444444444444
 reg new -p "$root/Settings"
-reg set "$root/Settings" SchemaVersion dword:2
+reg set "$root/Settings" SchemaVersion dword:3
 for key in "$client" "$policy" "$profile" "$identity"; do reg new -p "$key"; done
 reg set "$client" Name sz:Loopback
 reg set "$client" Enabled dword:1
@@ -65,12 +65,21 @@ reg set "$client" SecretFile sz:/var/state/radius/secrets/secret
 reg set "$client" Policies multi:22222222-2222-4222-8222-222222222222
 reg set "$policy" SSID sz:OfflineProof
 reg set "$policy" ConnectSecurity 'sz:O:SYG:SYD:'
+# Explicit default assignment preserves the existing no-VLAN behavior.
+access_profile=$root/AccessProfiles/55555555-5555-4555-8555-555555555555
+assignment_rule=$root/AccessPolicies/22222222-2222-4222-8222-222222222222/Rules/66666666-6666-4666-8666-666666666666
+reg new -p "$access_profile"
+reg set "$access_profile" Name sz:Default
+reg set "$access_profile" Enabled dword:1
+reg new -p "$assignment_rule"
+reg set "$assignment_rule" Name sz:Default
+reg set "$assignment_rule" Actions 'multi:ASSIGN(55555555-5555-4555-8555-555555555555)'
 # The proof tests service readiness/restart, not network admission.
 ports=Machine/System/Network/TcpIp/PortReservations
 reg new -p "$ports"
 reg set "$ports" @ hex:010004801400000020000000000000002c00000001010000000000051200000001010000000000051200000002001c00010000000000140000000010010100000000000512000000
 reg set "$ports" udp:18120 hex:010004801400000020000000000000002c00000001010000000000051200000001010000000000051200000002004400020000000000280001000000010600000000000550000000a381926237d7018113d25f71f4aec1cd93848f340000140000000010010100000000000512000000
-for key in "$root" "$root/Settings" "$root/Clients" "$client" "$root/AccessPolicies" "$policy" "$root/AuthenticationProfiles" "$profile" "$root/ServerIdentities" "$identity"; do
+for key in "$root/AccessProfiles" "$access_profile" "$root/AccessPolicies/22222222-2222-4222-8222-222222222222/Rules" "$assignment_rule" "$root" "$root/Settings" "$root/Clients" "$client" "$root/AccessPolicies" "$policy" "$root/AuthenticationProfiles" "$profile" "$root/ServerIdentities" "$identity"; do
     reg sd "$key" --set "O:SYG:SYD:P(A;OICI;GA;;;SY)(A;OICI;GR;;;${radius_sid})"
 done
 svctl definition create radiusd --set ImagePath=/bin/bash --set Arguments=-c \

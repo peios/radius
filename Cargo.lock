@@ -900,6 +900,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "peios-uapi"
+version = "0.1.0"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -916,6 +920,13 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
+name = "pnp-core"
+version = "0.1.0"
+dependencies = [
+ "peios-uapi",
+]
 
 [[package]]
 name = "portable-atomic"
@@ -990,6 +1001,7 @@ dependencies = [
  "libc",
  "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
  "radius-management",
+ "radius-policy",
  "serde_json",
  "zeroize",
 ]
@@ -1041,6 +1053,7 @@ dependencies = [
  "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
  "radius-accounting",
  "radius-core",
+ "radius-policy",
  "ring",
  "rustls",
  "serde",
@@ -1048,6 +1061,15 @@ dependencies = [
  "socket2",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "radius-policy"
+version = "0.1.0"
+dependencies = [
+ "pnp-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1062,9 +1084,11 @@ dependencies = [
  "radius-accounting",
  "radius-core",
  "radius-management",
+ "radius-policy",
  "rcgen",
  "ring",
  "rustls",
+ "serde_json",
  "socket2",
  "zeroize",
 ]

@@ -23,7 +23,7 @@ reg del -r -y "$root" >/dev/null
 radius config init >/dev/null
 radius config check >/dev/null
 before=$(radius --json config show)
-[[ $before == *'"objects":[]'* && $before == *'"SchemaVersion":{"type":"number","value":2}'* ]]
+[[ $before == *'"objects":[]'* && $before == *'"SchemaVersion":{"type":"number","value":3}'* ]]
 if radius config init >/dev/null 2>&1; then
     echo 'Initialization unexpectedly replaced existing configuration' >&2
     exit 1

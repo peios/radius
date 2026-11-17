@@ -62,6 +62,7 @@ enum Outcome {
     Inspected(String),
     Accounting(serde_json::Value),
     AccountingView(&'static str, serde_json::Value),
+    Explained(serde_json::Value),
 }
 struct Pending {
     description: String,
@@ -82,8 +83,320 @@ struct Window {
     secret: Option<Zeroizing<String>>,
     inspection: Option<String>,
     sd_editor: Option<gxwi_sd_editor::Editor>,
+    condition_count: usize,
+    explain_claim_count: usize,
+    explanation: Option<serde_json::Value>,
 }
-const SECTIONS: [(&str, &str, Glyph); 8] = [
+fn rule_conditions(record: &Record) -> Vec<(&str, &Value)> {
+    if record.kind != Kind::Rule {
+        return Vec::new();
+    }
+    record
+        .values
+        .iter()
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "Name" | "Enabled" | "Priority" | "Actions" | "Policy" | "Parent"
+            )
+        })
+        .map(|(k, v)| (k.as_str(), v))
+        .collect()
+}
+fn explanation_facts(fields: &Fields, claim_count: usize) -> io::Result<radius_policy::Facts> {
+    use radius_policy::{Facts, Scalar};
+    let bad = |s| io::Error::new(io::ErrorKind::InvalidInput, s);
+    let mut facts = Facts::new();
+    facts.claim_coverage = if fields.get("explain-coverage") == "complete" {
+        radius_policy::ClaimCoverage::Complete
+    } else {
+        radius_policy::ClaimCoverage::Filtered
+    };
+    facts.absent_claims = fields
+        .get("explain-absent")
+        .lines()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    for (field, key) in [
+        ("explain-user", "Subject.User"),
+        ("explain-groups", "Subject.Group"),
+        ("explain-name", "Subject.Name"),
+        ("explain-client", "Client.Id"),
+        ("explain-address", "Client.Address"),
+        ("explain-ssid", "Request.SSID"),
+        ("explain-station", "Request.Station"),
+    ] {
+        let text = fields.get(field);
+        if text.is_empty() {
+            continue;
+        }
+        let values = text
+            .lines()
+            .map(|s| match key {
+                "Subject.User" | "Subject.Group" => Ok(Scalar::Sid(s.into())),
+                "Client.Address" => s
+                    .parse()
+                    .map(Scalar::Address)
+                    .map_err(|_| bad("Invalid client address.")),
+                "Request.Station" => radius_policy::station_mac(s.as_bytes())
+                    .map(Scalar::Mac)
+                    .ok_or_else(|| bad("Invalid station MAC.")),
+                _ => Ok(Scalar::String(s.into())),
+            })
+            .collect::<io::Result<_>>()?;
+        facts.insert(key.into(), values);
+    }
+    for i in 0..claim_count {
+        let name = fields.get(&format!("explain-claim-name-{i}"));
+        if !name.is_empty() {
+            let values = fields
+                .get(&format!("explain-claim-values-{i}"))
+                .lines()
+                .map(|s| match fields.get(&format!("explain-claim-type-{i}")) {
+                    "" | "String" => Ok(Scalar::String(s.into())),
+                    "Sid" => Ok(Scalar::Sid(s.into())),
+                    "Int64" => s
+                        .parse()
+                        .map(Scalar::Int64)
+                        .map_err(|_| bad("Invalid signed claim value.")),
+                    "Uint64" => s
+                        .parse()
+                        .map(Scalar::Uint64)
+                        .map_err(|_| bad("Invalid unsigned claim value.")),
+                    "Boolean" => s
+                        .parse()
+                        .map(Scalar::Boolean)
+                        .map_err(|_| bad("Boolean values must be true or false.")),
+                    "Octet" => {
+                        if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+                            return Err(bad("Invalid hexadecimal octets."));
+                        }
+                        Ok(Scalar::Octet(
+                            (0..s.len())
+                                .step_by(2)
+                                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                                .collect(),
+                        ))
+                    }
+                    _ => Err(bad("Choose a claim type.")),
+                })
+                .collect::<io::Result<_>>()?;
+            if facts
+                .insert(format!("Subject.Claim.{name}"), values)
+                .is_some()
+            {
+                return Err(bad("Duplicate claim name."));
+            }
+        }
+    }
+    radius_policy::validate_facts(&facts)
+        .map_err(|_| bad("Invalid or oversized hypothetical facts."))?;
+    Ok(facts)
+}
+impl Window {
+    fn explain_page(&self) -> String {
+        let mut policies = vec![(String::new(), "Choose policy…".into())];
+        let mut clients = vec![(String::new(), "Not supplied".into())];
+        if let Ok(stored) = &self.stored {
+            policies.extend(
+                stored
+                    .objects
+                    .iter()
+                    .filter(|r| r.kind == Kind::Policy)
+                    .map(|r| (r.id.clone(), r.name().into())),
+            );
+            clients.extend(
+                stored
+                    .objects
+                    .iter()
+                    .filter(|r| r.kind == Kind::Client)
+                    .map(|r| (r.id.clone(), r.name().into())),
+            );
+        }
+        let may = !self.busy;
+        let knowledge = settings::row(
+            "Claim Knowledge",
+            "Unknown omitted claims cannot satisfy an absence condition.",
+            &settings::select(
+                "explain-coverage",
+                "Claim Knowledge",
+                &[
+                    (
+                        "filtered".into(),
+                        "Only supplied values and known absences".into(),
+                    ),
+                    (
+                        "complete".into(),
+                        "Complete set: omitted claims are absent".into(),
+                    ),
+                ],
+                may,
+            ),
+        );
+        let mut rows = settings::row(
+            "Access Policy",
+            "Evaluates saved configuration; check Overview separately for activation.",
+            &settings::select("explain-policy", "Access Policy", &policies, may),
+        );
+        rows.push_str(&knowledge);
+        rows.push_str(&settings::row(
+            "Known Absent Claims",
+            "Optional names, one per line. These are hypothetical assertions.",
+            &list("explain-absent", "Known Absent Claims", may),
+        ));
+        for (field, label, multi) in [
+            ("explain-user", "User SID", false),
+            ("explain-groups", "Group SIDs (one per line)", true),
+            ("explain-name", "Canonical Username", false),
+            ("explain-address", "Client Source Address", false),
+            ("explain-ssid", "Reported SSID", false),
+            ("explain-station", "Reported Station MAC", false),
+        ] {
+            rows.push_str(&settings::row(
+                label,
+                "Blank means this fact is not supplied.",
+                &if multi {
+                    list(field, label, may)
+                } else {
+                    text(field, label, "text", may)
+                },
+            ));
+        }
+        rows.push_str(&settings::row(
+            "Verified Client (hypothetical)",
+            "A supplied example, not proof that this client sent a request.",
+            &settings::select("explain-client", "Client", &clients, may),
+        ));
+        for i in 0..self.explain_claim_count {
+            rows.push_str(&settings::row(
+                &format!("Claim {}", i + 1),
+                "Optional hypothetical claim.",
+                &text(
+                    &format!("explain-claim-name-{i}"),
+                    "Claim Name",
+                    "text",
+                    may,
+                ),
+            ));
+            rows.push_str(&settings::row(
+                "Claim Type",
+                "Values retain their declared type.",
+                &settings::select(
+                    &format!("explain-claim-type-{i}"),
+                    "Claim Type",
+                    &["String", "Int64", "Uint64", "Boolean", "Sid", "Octet"]
+                        .map(|s| (s.into(), s.into())),
+                    may,
+                ),
+            ));
+            rows.push_str(&settings::row(
+                "Claim Values",
+                "One value per line. Octet values use hexadecimal.",
+                &format!(
+                    "{}{}",
+                    list(&format!("explain-claim-values-{i}"), "Claim Values", may),
+                    settings::button(
+                        "Remove Claim",
+                        "explain-claim-remove",
+                        &[("index", &i.to_string())],
+                        Button::Plain,
+                        may
+                    )
+                ),
+            ));
+        }
+        rows.push_str(&settings::row(
+            "Claims",
+            "Supply only the facts you want to test.",
+            &settings::button(
+                "Add Claim",
+                "explain-claim-add",
+                &[],
+                Button::Plain,
+                may && self.explain_claim_count < 64,
+            ),
+        ));
+        let mut page = format!(
+            "<form fx-submit=\"explain-run\">{}{}</form>",
+            settings::group("Hypothetical Facts", &rows, ""),
+            settings::actions(&settings::submit("Explain", Button::Primary, may))
+        );
+        if let Some(result) = &self.explanation {
+            let e = &result["explanation"];
+            let mut rows = settings::fact(
+                "Outcome",
+                e["outcome"].as_str().unwrap_or("unavailable"),
+                false,
+            );
+            rows.push_str(&settings::fact(
+                "Configuration Fingerprint",
+                result["fingerprint"].as_str().unwrap_or_default(),
+                true,
+            ));
+            rows.push_str(&settings::row("Scope","Hypothetical assignment only. Credentials, Connect permissions and accounting allowances were not checked.",""));
+            if let Some(candidates) = e["candidates"].as_array() {
+                for c in candidates {
+                    let rule = c["rule"].as_str().unwrap_or_default();
+                    let profile = c["profile"].as_str();
+                    let target = profile
+                        .and_then(|id| {
+                            self.stored
+                                .as_ref()
+                                .ok()
+                                .and_then(|s| s.get(Kind::AccessProfile, id))
+                        })
+                        .map(|p| p.name())
+                        .or(profile)
+                        .unwrap_or("REJECT");
+                    rows.push_str(&settings::row(
+                        rule,
+                        &format!("Priority {} → {target}", c["priority"]),
+                        "",
+                    ));
+                }
+            }
+            if let Some(traces) = e["rules"].as_array() {
+                for r in traces {
+                    let matched = r["matched"].as_bool() == Some(true);
+                    let steps = r["steps"]
+                        .as_array()
+                        .map(|v| {
+                            v.iter()
+                                .filter_map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    rows.push_str(&settings::row(
+                        r["rule"].as_str().unwrap_or_default(),
+                        &format!(
+                            "{} · {steps}",
+                            if matched { "Matched" } else { "Did not match" }
+                        ),
+                        "",
+                    ));
+                    if let Some(conditions) = r["conditions"].as_array() {
+                        for c in conditions {
+                            rows.push_str(&settings::fact(
+                                c["condition"].as_str().unwrap_or_default(),
+                                if c["matched"].as_bool() == Some(true) {
+                                    "Matched"
+                                } else {
+                                    "Did not match"
+                                },
+                                false,
+                            ));
+                        }
+                    }
+                }
+            }
+            page.push_str(&settings::group("Explanation", &rows, ""));
+        }
+        page
+    }
+}
+const SECTIONS: [(&str, &str, Glyph); 11] = [
     ("overview", "Overview", Glyph::Server),
     ("client", "Clients", Glyph::Globe),
     ("policy", "Access Policies", Glyph::Shield),
@@ -92,6 +405,9 @@ const SECTIONS: [(&str, &str, Glyph); 8] = [
     ("accounting", "Accounting", Glyph::Server),
     ("quota", "Allowances", Glyph::Shield),
     ("accounting-profile", "Accounting Profiles", Glyph::Globe),
+    ("access-profile", "Access Profiles", Glyph::Globe),
+    ("rule", "Assignment Rules", Glyph::Shield),
+    ("explain", "Explain Policy", Glyph::Shield),
 ];
 fn section_tile(section: &str) -> Tile {
     match section {
@@ -100,6 +416,8 @@ fn section_tile(section: &str) -> Tile {
         "policy" => Tile::Violet,
         "profile" => Tile::Orange,
         "identity" => Tile::Green,
+        "access-profile" => Tile::Teal,
+        "rule" | "explain" => Tile::Violet,
         _ => Tile::Slate,
     }
 }
@@ -112,6 +430,9 @@ fn section_about(section: &str) -> &'static str {
         "accounting"=>"Recorded sessions, usage and accounting health on this machine.",
         "quota"=>"Independent limits for users and groups. Every applicable allowance must permit access.",
         "accounting-profile"=>"Declarative mappings for accounting attributes reported by network devices.",
+        "access-profile"=>"Reusable network access settings selected by policy rules.",
+        "rule"=>"PNP-style rules and nested exceptions selecting one complete access profile.",
+        "explain"=>"Test saved assignment rules with hypothetical facts. This does not authenticate anyone or grant access.",
         _ => "RADIUS authentication and admission on this machine.",
     }
 }
@@ -139,6 +460,34 @@ fn field_text(value: &Value) -> String {
     }
 }
 fn fill(record: &Record, fields: &mut Fields) {
+    if record.kind == Kind::Rule {
+        for (i, (key, value)) in rule_conditions(record).into_iter().enumerate() {
+            let (fact, operator) = key.rsplit_once('.').unwrap_or((key, "Equal"));
+            fields.set(&format!("rule-fact-{i}"), fact);
+            fields.set(&format!("rule-op-{i}"), operator);
+            fields.set(&format!("rule-values-{i}"), &field_text(value));
+        }
+        let actions = record.actions();
+        let reject = actions.iter().any(|s| s.eq_ignore_ascii_case("REJECT"));
+        let assigned = actions.iter().find_map(|s| {
+            let s = s.trim();
+            (s.get(..7)
+                .is_some_and(|s| s.eq_ignore_ascii_case("ASSIGN("))
+                && s.ends_with(')'))
+            .then(|| s[7..s.len() - 1].trim())
+        });
+        fields.set(
+            "rule-action",
+            if reject {
+                "REJECT"
+            } else if assigned.is_some() {
+                "ASSIGN"
+            } else {
+                "NULL"
+            },
+        );
+        fields.set("rule-profile", assigned.unwrap_or_default());
+    }
     fields.set("Name", record.name());
     fields.set("Enabled", if record.enabled() { "1" } else { "0" });
     fields.set("shared-secret", "");
@@ -210,6 +559,9 @@ fn label(field: &str) -> &str {
         "AccountingSecurity" => "Accounting Permissions (blank to inherit)",
         "ServiceKind" => "Service Kind",
         "Definition" => "Profile Definition (JSON)",
+        "VlanId" => "VLAN ID (blank for no override)",
+        "Parent" => "Parent Rule (blank for a root rule)",
+        "Priority" => "Priority (blank to inherit)",
         _ => field,
     }
 }
@@ -228,7 +580,20 @@ fn affected(stored: &Stored, record: &Record) -> String {
     } else {
         format!(
             "Used by: {}.",
-            uses.iter().map(|r| r.name()).collect::<Vec<_>>().join(", ")
+            uses.iter()
+                .map(|r| {
+                    if r.kind == Kind::Rule {
+                        let policy = stored
+                            .get(Kind::Policy, r.text("Policy").unwrap_or_default())
+                            .map(|p| p.name())
+                            .unwrap_or("Missing policy");
+                        format!("{policy} / {}", r.name())
+                    } else {
+                        r.name().to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     }
 }
@@ -301,6 +666,7 @@ impl Window {
                             }
                             w.accounting[key] = snapshot;
                         }
+                        Ok(Outcome::Explained(result)) => w.explanation = Some(result),
                         Err(error) => w.said = Some(Err(error)),
                     }
                     fields.set("shared-secret", "");
@@ -316,6 +682,7 @@ impl Window {
         self.said = None;
     }
     fn begin_edit(&mut self, record: Record, creating: bool, fields: &mut Fields) {
+        self.condition_count = rule_conditions(&record).len();
         if let Ok(stored) = &self.stored {
             for r in stored.objects.iter().filter(|r| r.kind == Kind::Policy) {
                 fields.set(&format!("allow-{}", r.id), "");
@@ -350,6 +717,59 @@ impl Window {
         }
         for (field, ty) in record.kind.fields() {
             if matches!(*field, "SecretFile" | "ConnectSecurity") {
+                continue;
+            }
+            if record.kind == Kind::Rule && *field == "Actions" {
+                continue;
+            }
+            if record.kind == Kind::Rule && matches!(*field, "Policy" | "Parent") {
+                let mut options = vec![(
+                    String::new(),
+                    if *field == "Parent" {
+                        "No parent (root rule)".into()
+                    } else {
+                        "Choose policy…".into()
+                    },
+                )];
+                if let Ok(stored) = &self.stored {
+                    if *field == "Policy" {
+                        options.extend(
+                            stored
+                                .objects
+                                .iter()
+                                .filter(|r| {
+                                    r.kind == Kind::Policy
+                                        && r.text("ServiceKind") != Some("accounting-only")
+                                })
+                                .map(|r| (r.id.clone(), r.name().into())),
+                        );
+                    } else {
+                        options.extend(
+                            stored
+                                .objects
+                                .iter()
+                                .filter(|r| r.kind == Kind::Rule && r.id != record.id)
+                                .map(|r| {
+                                    let parent = r.text("Parent").unwrap_or_default();
+                                    let path = if parent.is_empty() {
+                                        r.id.clone()
+                                    } else {
+                                        format!("{parent}/{}", r.id)
+                                    };
+                                    let policy = stored
+                                        .get(Kind::Policy, r.text("Policy").unwrap_or_default())
+                                        .map(|p| p.name())
+                                        .unwrap_or("Missing policy");
+                                    (path, format!("{policy} / {}", r.name()))
+                                }),
+                        );
+                    }
+                }
+                rows.push_str(&settings::row(
+                    label(field),
+                    "A rule stays under its original policy and parent after creation.",
+                    &settings::select(field, label(field), &options, may && self.creating),
+                ));
                 continue;
             }
             let control = if let Some(kind) = reference(field) {
@@ -414,6 +834,74 @@ impl Window {
             let about=match *field{"Addresses"=>"One IP address or canonical CIDR prefix per line.","Policies"=>"Only these policies may be selected by this client.","CertificateFiles"=>"Import PEM or DER files from this Peios machine, one path per line. Leave blank to keep the current certificate.","PrivateKeyFile"=>"Import the matching PEM or DER private key; the key is stored in a protected file.",_=>""};
             rows.push_str(&settings::row(label(field), about, &control));
         }
+        if record.kind == Kind::Rule {
+            rows.push_str(&settings::row(
+                "Action",
+                "NULL uses the nearest parent action. REJECT wins equal-priority ties.",
+                &settings::select(
+                    "rule-action",
+                    "Action",
+                    &[
+                        ("ASSIGN".into(), "Assign access profile".into()),
+                        ("REJECT".into(), "Reject".into()),
+                        ("NULL".into(), "Abstain (NULL)".into()),
+                    ],
+                    may,
+                ),
+            ));
+            let mut profiles = vec![(String::new(), "Choose a profile…".into())];
+            if let Ok(stored) = &self.stored {
+                profiles.extend(
+                    stored
+                        .objects
+                        .iter()
+                        .filter(|r| r.kind == Kind::AccessProfile)
+                        .map(|r| (r.id.clone(), r.name().into())),
+                );
+            }
+            rows.push_str(&settings::row(
+                "Access Profile",
+                "Used by the Assign action.",
+                &settings::select("rule-profile", "Access Profile", &profiles, may),
+            ));
+            for i in 0..self.condition_count {
+                let controls = format!(
+                    "{}{}{}{}",
+                    text(&format!("rule-fact-{i}"), "Fact", "text", may),
+                    settings::select(
+                        &format!("rule-op-{i}"),
+                        "Operator",
+                        &[
+                            ("Equal".into(), "Equals any listed value".into()),
+                            ("Present".into(), "Present (1) or absent (0)".into()),
+                            ("GreaterThan".into(), "Greater than".into()),
+                            ("LessThan".into(), "Less than".into())
+                        ],
+                        may
+                    ),
+                    list(&format!("rule-values-{i}"), "Values (one per line)", may),
+                    settings::button(
+                        "Remove",
+                        "condition-remove",
+                        &[("index", &i.to_string())],
+                        Button::Plain,
+                        may
+                    )
+                );
+                rows.push_str(&settings::row(&format!("Condition {}",i+1),"All conditions must match. Claim facts use Subject.Claim.name.Type; types include String, Int64, Uint64, Boolean, Sid and Octet.",&controls));
+            }
+            rows.push_str(&settings::row(
+                "Conditions",
+                "A rule with no conditions matches its whole parent region.",
+                &settings::button(
+                    "Add Condition",
+                    "condition-add",
+                    &[],
+                    Button::Plain,
+                    may && self.condition_count < radius_policy::MAX_CONDITIONS,
+                ),
+            ));
+        }
         if record.kind == Kind::Client {
             rows.push_str(&settings::row("Shared Secret",if self.creating{"Leave blank to generate a secret. Reveal it after saving to configure the RADIUS client."}else{"Leave blank to keep the current secret. Replacement requires updating the corresponding RADIUS client."},&text("shared-secret","Shared Secret","password",may)));
         }
@@ -464,6 +952,15 @@ impl Window {
         page.push_str(&settings::group("Permissions", &permissions, ""));
         if !self.creating {
             let mut controls = String::new();
+            if record.kind == Kind::Rule {
+                controls.push_str(&settings::button(
+                    "Add Exception…",
+                    "rule-child",
+                    &[],
+                    Button::Plain,
+                    may,
+                ));
+            }
             if record.kind == Kind::Client {
                 controls.push_str(&settings::button(
                     if self.secret.is_some() {
@@ -1029,6 +1526,8 @@ impl Live for Window {
             page.push_str(&self.overview_page());
         } else if self.section == "accounting" {
             page.push_str(&self.accounting_page());
+        } else if self.section == "explain" {
+            page.push_str(&self.explain_page());
         } else if let Some(record) = &self.edit {
             page.push_str(&self.form(record));
         } else if let Some(kind) = Kind::parse(self.section) {
@@ -1076,6 +1575,9 @@ impl Live for Window {
         if self.busy {
             return;
         }
+        if name.starts_with("explain-") {
+            self.explanation = None;
+        }
         if let Some(id) = name.strip_prefix("allow-") {
             let mut ids: Vec<String> = fields.get("Policies").lines().map(str::to_owned).collect();
             ids.retain(|v| v != id);
@@ -1090,6 +1592,48 @@ impl Live for Window {
             return;
         }
         match name {
+            "rule-child"=>{
+                if let Some(parent)=self.edit.clone().filter(|r|r.kind==Kind::Rule&&!self.creating&&self.writable) {
+                    match Record::new(Kind::Rule,"") {
+                        Ok(mut record)=>{
+                            record.values.insert("Policy".into(),Value::Text(parent.text("Policy").unwrap_or_default().into()));
+                            let path=parent.text("Parent").unwrap_or_default();
+                            record.values.insert("Parent".into(),Value::Text(if path.is_empty(){parent.id}else{format!("{path}/{}",parent.id)}));
+                            self.begin_edit(record,true,fields);
+                        },Err(e)=>self.said=Some(Err(e)),
+                    }
+                }
+            },
+            "explain-claim-add"=>{if self.explain_claim_count<64 {
+                let i=self.explain_claim_count;self.explain_claim_count+=1;self.explanation=None;
+                fields.set(&format!("explain-claim-name-{i}"),"");fields.set(&format!("explain-claim-type-{i}"),"String");fields.set(&format!("explain-claim-values-{i}"),"");
+            }},
+            "explain-claim-remove"=>{
+                if let Some(i)=value.get("index").and_then(|v|v.as_str()).and_then(|v|v.parse::<usize>().ok()).filter(|i|*i<self.explain_claim_count) {
+                    for j in i..self.explain_claim_count-1 {for suffix in ["name","type","values"] {
+                        let value=fields.get(&format!("explain-claim-{suffix}-{}",j+1)).to_owned();fields.set(&format!("explain-claim-{suffix}-{j}"),&value);
+                    }}self.explain_claim_count-=1;self.explanation=None;
+                }
+            },
+            "condition-add"=>{
+                if self.edit.as_ref().is_some_and(|r|r.kind==Kind::Rule)&&self.writable&&self.condition_count<radius_policy::MAX_CONDITIONS {
+                    let i=self.condition_count;self.condition_count+=1;
+                    fields.set(&format!("rule-fact-{i}"),"Subject.Group");fields.set(&format!("rule-op-{i}"),"Equal");fields.set(&format!("rule-values-{i}"),"");
+                }
+            },
+            "condition-remove"=>{
+                if let Some(i)=value.get("index").and_then(|v|v.as_str()).and_then(|v|v.parse::<usize>().ok()).filter(|i|*i<self.condition_count) {
+                    for j in i..self.condition_count-1 {for suffix in ["fact","op","values"] {
+                        let text=fields.get(&format!("rule-{suffix}-{}",j+1)).to_owned();fields.set(&format!("rule-{suffix}-{j}"),&text);
+                    }}self.condition_count-=1;
+                }
+            },
+            "explain-run"=>{
+                match explanation_facts(fields,self.explain_claim_count) {
+                    Ok(facts)=>{let policy=fields.get("explain-policy").to_owned();self.launch(Box::new(move||operations::explain(&policy,&facts).map(Outcome::Explained)));},
+                    Err(e)=>self.said=Some(Err(e.to_string())),
+                }
+            },
             "accounting-refresh"=>self.launch(Box::new(||Ok(Outcome::Accounting(radius_management::native::accounting::query(radius_management::accounting::Request::Sessions{filter:crate::cli::radius_accounting_filter(None)})?)))),
             "accounting-next"=>{if let (Some(after),Some(revision))=(value.get("after").and_then(|v|v.as_str()),value.get("revision").and_then(|v|v.as_str()).and_then(|v|v.parse().ok())) {
                 let mut filter=crate::cli::radius_accounting_filter(None);filter.after=Some(after.into());filter.revision=Some(revision);
@@ -1221,6 +1765,7 @@ impl Live for Window {
                 };
                 let creating = self.creating;
                 let mut patch = Values::new();
+                let mut remove=Vec::new();
                 patch.insert("Name".into(), Value::Text(fields.get("Name").to_owned()));
                 if record.kind != Kind::Identity {
                     patch.insert(
@@ -1233,7 +1778,11 @@ impl Live for Window {
                     if matches!(*field, "SecretFile" | "ConnectSecurity") {
                         continue;
                     }
+                    if record.kind==Kind::Rule && (matches!(*field,"Actions") || (!creating&&matches!(*field,"Policy"|"Parent"))) {continue;}
                     let text = fields.get(field);
+                    if text.is_empty()&&record.kind.optional(field)&&matches!(*field,"VlanId"|"Priority") {
+                        if record.values.contains_key(*field){remove.push((*field).into());}continue;
+                    }
                     if text.is_empty()&&record.kind.optional(field)&&*ty==Field::Number{continue;}
                     if record.kind == Kind::Identity && !creating && text.is_empty() {
                         continue;
@@ -1260,6 +1809,19 @@ impl Live for Window {
                     };
                     patch.insert((*field).into(), value);
                 }
+                if record.kind==Kind::Rule {
+                    let action=match fields.get("rule-action") {
+                        "ASSIGN"=>format!("ASSIGN({})",fields.get("rule-profile")),"REJECT"=>"REJECT".into(),_=>"NULL".into(),
+                    };patch.insert("Actions".into(),Value::List(vec![action]));
+                    for i in 0..self.condition_count {
+                        let key=format!("{}.{}",fields.get(&format!("rule-fact-{i}")).trim(),fields.get(&format!("rule-op-{i}")));
+                        let text=fields.get(&format!("rule-values-{i}"));
+                        let value=if key.ends_with(".Equal") {Value::List(text.lines().map(str::to_owned).collect())}
+                            else {match operations::parse_field(Kind::Rule,&key,text) {Ok(v)=>v,Err(e)=>{self.said=Some(Err(e.to_string()));return;}}};
+                        if patch.insert(key,value).is_some(){self.said=Some(Err("Duplicate condition; put alternatives in one condition.".into()));return;}
+                    }
+                    for (key,_) in rule_conditions(&record) {if !patch.contains_key(key){remove.push(key.into());}}
+                }
                 let secret = Zeroizing::new(fields.get("shared-secret").as_bytes().to_vec());
                 fields.set("shared-secret", "");
                 let needs_confirmation = !creating
@@ -1274,8 +1836,9 @@ impl Live for Window {
                     .unwrap_or_default();
                 let work: Action = Box::new(move || {
                     let secret = (!secret.is_empty()).then_some(secret.as_slice());
-                    operations::submit(&record, &mut patch, creating, secret, import)
-                        .map(Outcome::Saved)
+                    if record.kind==Kind::Rule || record.kind==Kind::AccessProfile {
+                        operations::save_edit(&record,&patch,&remove,creating).map(Outcome::Saved)
+                    }else{operations::submit(&record, &mut patch, creating, secret, import).map(Outcome::Saved)}
                 });
                 if needs_confirmation {
                     self.request(format!("Apply this change? {description}"), work);
@@ -1365,6 +1928,9 @@ pub fn open() -> i32 {
             secret: None,
             inspection: None,
             sd_editor: None,
+            condition_count: 0,
+            explain_claim_count: 1,
+            explanation: None,
         },
     );
     let weak = Arc::downgrade(&surface);
@@ -1398,6 +1964,65 @@ pub fn open() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hypothetical_claims_keep_types_and_completeness_explicit() {
+        let mut fields = Fields::default();
+        fields.set("explain-claim-name-0", "Équipe");
+        fields.set("explain-claim-type-0", "String");
+        fields.set("explain-claim-values-0", "Engineering");
+        fields.set("explain-claim-name-1", "Limit");
+        fields.set("explain-claim-type-1", "Uint64");
+        fields.set("explain-claim-values-1", "18446744073709551615");
+        let facts = explanation_facts(&fields, 2).unwrap();
+        assert_eq!(facts.claim_coverage, radius_policy::ClaimCoverage::Filtered);
+        assert_eq!(
+            facts["Subject.Claim.équipe"],
+            vec![radius_policy::Scalar::String("Engineering".into())]
+        );
+        assert_eq!(
+            facts["Subject.Claim.Limit"],
+            vec![radius_policy::Scalar::Uint64(u64::MAX)]
+        );
+        fields.set("explain-claim-name-1", "équipe");
+        assert!(explanation_facts(&fields, 2).is_err());
+    }
+    #[test]
+    fn adding_an_exception_preserves_policy_and_real_parent_path() {
+        let mut w = window();
+        let mut fields = Fields::default();
+        let mut rule = Record::new(Kind::Rule, "Default").unwrap();
+        rule.values.insert(
+            "Policy".into(),
+            Value::Text("11111111-1111-4111-8111-111111111111".into()),
+        );
+        let parent = rule.id.clone();
+        w.edit = Some(rule);
+        w.creating = false;
+        w.event("rule-child", &serde_json::json!({}), &mut fields);
+        let child = w.edit.as_ref().unwrap();
+        assert!(w.creating);
+        assert_eq!(child.text("Parent"), Some(parent.as_str()));
+        assert_eq!(
+            child.text("Policy"),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+    }
+    #[test]
+    fn explanation_view_escapes_rule_names_and_marks_simulation() {
+        let mut w = window();
+        w.explanation = Some(
+            serde_json::json!({"configuration":"saved","fingerprint":"test","explanation":{
+            "outcome":"conflicting-profiles","candidates":[{"rule":"<script>unsafe()</script>","profile":null,"priority":0}],"rules":[]}}),
+        );
+        let page = w.explain_page();
+        assert!(!page.contains("<script>unsafe()"));
+        assert!(page.contains("&lt;script&gt;"));
+        assert!(page.contains("Hypothetical"));
+        assert!(page.contains("were not checked"));
+        let mut fields = Fields::default();
+        w.input("explain-user", &mut fields);
+        assert!(w.explanation.is_none());
+    }
     fn window() -> Window {
         Window {
             surface: Weak::new(),
@@ -1414,6 +2039,9 @@ mod tests {
             secret: None,
             inspection: None,
             sd_editor: None,
+            condition_count: 0,
+            explain_claim_count: 1,
+            explanation: None,
         }
     }
     fn policy() -> Record {

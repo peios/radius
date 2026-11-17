@@ -55,6 +55,9 @@ impl Backend for AccountingAuth {
     fn identity<'a>(&self, s: &'a Authenticated) -> (&'a str, &'a [u8]) {
         self.auth.identity(s)
     }
+    fn policy_facts(&self, s: &Authenticated) -> Result<radius_policy::Facts, Reason> {
+        self.auth.policy_facts(s)
+    }
     fn completed(&mut self, id: &[u8; 16]) {
         self.pending.remove(id);
     }

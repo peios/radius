@@ -73,6 +73,7 @@ pub struct Client {
     pub networks: Vec<String>,
 }
 pub struct Network {
+    pub access: Arc<radius_policy::Policy>,
     pub enabled: bool,
     pub tls: Option<Arc<rustls::ServerConfig>>,
     pub tls_tag: [u8; 32],

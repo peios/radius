@@ -128,6 +128,7 @@ pub fn prepare(stored: &Stored) -> io::Result<Config> {
         networks.insert(
             r.id.clone(),
             Network {
+                access: Arc::new(crate::access_policy::compile(stored, &r.id).map_err(invalid)?),
                 enabled: r.enabled() && profile.enabled(),
                 tls: Some(tls.clone()),
                 tls_tag: *tls_tag,

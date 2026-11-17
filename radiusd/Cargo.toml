@@ -11,6 +11,7 @@ native = ["dep:peios", "dep:peios-auth", "dep:libc", "dep:socket2", "radius-mana
 
 [dependencies]
 radius-core = { path = "../radius-core" }
+radius-policy = { path = "../radius-policy" }
 radius-management = { path = "../radius-management" }
 radius-accounting = { path = "../radius-accounting" }
 ring.workspace = true
@@ -22,6 +23,7 @@ peios = { git = "https://github.com/peios/peios-rs.git", rev = "b1290dbfa805d4ef
 peios-auth = { git = "https://github.com/peios/authd.git", rev = "5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652", optional = true }
 
 [dev-dependencies]
+serde_json = "1"
 rcgen = { version = "=0.14.9", default-features = false, features = ["ring", "crypto"] }
 hmac.workspace = true
 md-5.workspace = true

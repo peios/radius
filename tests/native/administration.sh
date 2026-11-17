@@ -37,6 +37,8 @@ alternate=$(radius --json profile create Alternate --set AuthenticationMethods=t
 alternate_id=$(guid "$alternate")
 other=$(radius --json policy create Other --set SSID=Other --set AuthenticationProfile="$alternate_id" --set "ConnectSecurity=$connect")
 other_id=$(guid "$other")
+other_rule=$(radius --json rule create OtherDefault --set Policy="$other_id" --set 'Actions=ASSIGN(55555555-5555-4555-8555-555555555555)')
+other_rule_id=$(guid "$other_rule")
 radius client set "$client_id" --set Policies="$policy_id,$other_id" > /dev/null
 reject radius profile delete "$alternate_id"
 reject radius policy delete "$other_id"
@@ -99,6 +101,7 @@ radius identity delete "$imported_id" > /dev/null
 echo 'PASS RADIUS ADMIN: PEM import, certificate inspection, invalid replacement preservation'
 
 radius client set "$client_id" --set Policies="$policy_id" > /dev/null
+radius rule delete "$other_rule_id" > /dev/null
 radius policy delete "$other_id" > /dev/null
 radius profile delete "$alternate_id" > /dev/null
 radius service boot off > /dev/null

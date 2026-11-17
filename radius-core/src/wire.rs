@@ -207,6 +207,33 @@ pub(crate) fn response_with_class(
     reauthenticate_seconds: Option<u32>,
     class: Option<&[u8]>,
 ) -> Result<Vec<u8>, Error> {
+    response_with_policy(
+        request_id,
+        request_auth,
+        secret,
+        code,
+        eap,
+        state,
+        msk,
+        reauthenticate_seconds,
+        class,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn response_with_policy(
+    request_id: u8,
+    request_auth: &[u8; 16],
+    secret: &[u8],
+    code: u8,
+    eap: &[u8],
+    state: Option<[u8; 16]>,
+    msk: Option<&[u8]>,
+    reauthenticate_seconds: Option<u32>,
+    class: Option<&[u8]>,
+    vlan: Option<u16>,
+) -> Result<Vec<u8>, Error> {
     let mut out = vec![code, request_id, 0, 0];
     out.extend_from_slice(request_auth);
     // First attribute: strict MA, including for Reject and Challenge.
@@ -222,6 +249,17 @@ pub(crate) fn response_with_class(
             return Err(Error::Configuration);
         }
         attribute(&mut out, 25, class)?;
+    }
+    if let Some(vlan) = vlan {
+        if code != 2 || !(1..=4094).contains(&vlan) {
+            return Err(Error::Configuration);
+        }
+        // RFC 3580 section 3.31: one consistently untagged VLAN tunnel set.
+        attribute(&mut out, 64, &[0, 0, 0, 13])?; // Tunnel-Type = VLAN
+        attribute(&mut out, 65, &[0, 0, 0, 6])?; // Tunnel-Medium-Type = IEEE-802
+        let mut group = vec![0];
+        group.extend_from_slice(vlan.to_string().as_bytes());
+        attribute(&mut out, 81, &group)?; // Tunnel-Private-Group-ID: decimal VLAN
     }
     if let Some(seconds) = reauthenticate_seconds {
         if code != 2 || seconds == 0 {

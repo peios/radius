@@ -12,6 +12,7 @@ window = ["native", "dep:gxwi", "dep:gxwi-sd-editor"]
 
 [dependencies]
 radius-management = { path = "../radius-management" }
+radius-policy = { path = "../radius-policy" }
 serde_json = "1"
 zeroize.workspace = true
 peios = { git = "https://github.com/peios/peios-rs.git", rev = "b1290dbfa805d4ef151d3fc961a8d89d6c30c12c", optional = true }

@@ -112,10 +112,55 @@ no unbounded queue. Lowering the limit does not restart existing work.
 canonical: Machine\Software\Radius\Settings SchemaVersion
 type: REG_DWORD
 default: (required)
-valid: 2
+valid: 3
 applies: live
 
 Configuration schema version. Older layouts require explicit conversion.
+
+--- machine\software\radius\accessprofiles\<guid>
+canonical: Machine\Software\Radius\AccessProfiles\<guid>
+
+Complete access settings selected by assignment rules. `Name` is a display
+label; `Enabled` is `0` or `1`. References use the permanent UUIDv4 key name.
+Unknown profile values invalidate the configuration. Disabling a selected
+profile refuses the affected admission.
+
+--- machine\software\radius\accessprofiles\<guid> vlanid
+canonical: Machine\Software\Radius\AccessProfiles\<guid> VlanId
+type: REG_DWORD
+default: (absent, no VLAN override)
+valid: 1–4094
+applies: live (subsequent authentication)
+
+VLAN sent with the complete tunnel attribute set in an Access-Accept.
+Zero is invalid. Removing the value stops sending VLAN override attributes.
+
+--- machine\software\radius\accesspolicies\<guid>\rules\<rule-guid>
+canonical: Machine\Software\Radius\AccessPolicies\<guid>\Rules\<rule-guid>
+
+PNP-style assignment rule. Child rule keys are exceptions to this rule.
+`Name` is an optional display label. `Enabled` defaults to `1`; `0` hides the
+whole subtree. `Priority` is a signed decimal string or DWORD and inherits
+from the parent, or defaults to `0` at a root.
+
+`Actions` is a string or string list containing `ASSIGN(profile-guid)`,
+`REJECT` or `NULL`. The absent action abstains. Matching children shadow
+their parent; abstaining descendants use the nearest ancestor decision.
+The highest priority wins. Equal-priority rejection wins over assignment.
+Equally ranked different profiles refuse the affected connection.
+
+Condition values use `Fact.Operator` names. Supported families are
+`Subject.User`, `Subject.Group`, `Subject.Name`,
+`Subject.Claim.<name>.<type>`, `Client.Id`, `Client.Address`,
+`Request.SSID` and `Request.Station`. Operators are `Equal`, `Present`,
+and numeric `GreaterThan` or `LessThan`. Claim types preserve native values.
+`Present=0` cannot match a claim whose absence authd has not established.
+Unknown facts and unsupported operators invalidate configuration.
+
+Rules are bounded to 1024, with 32 exception levels, 64 conditions per rule,
+256 alternatives per condition and 4 MiB of aggregate rule values.
+No selected profile refuses access. Defaults require an explicit rule.
+Assignment never bypasses credentials, Connect permissions or allowances.
 
 Objects use canonical lowercase UUIDv4 key names. Display names are separate,
 may change, and need not be unique. At most 256 objects of each kind are accepted.

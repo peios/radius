@@ -146,7 +146,10 @@ pub fn prepare(s: &Stored) -> Result<Configuration, String> {
         if !crate::model::valid_id(&r.id) {
             return Err(fail("invalid accounting object GUID"));
         }
-        if r.kind != Kind::Identity && !matches!(r.number("Enabled"), Some(0 | 1)) {
+        if r.kind != Kind::Identity
+            && !(r.kind == Kind::Rule && !r.values.contains_key("Enabled"))
+            && !matches!(r.number("Enabled"), Some(0 | 1))
+        {
             return Err(fail(format!("{} has invalid Enabled", r.id)));
         }
     }

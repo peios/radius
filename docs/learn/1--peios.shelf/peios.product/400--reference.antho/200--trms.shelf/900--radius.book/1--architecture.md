@@ -50,6 +50,9 @@ MSCHAPv2 response event after the source-issued challenge. The Peios adapter
 uses authd Authenticate and retains its verified identity, source groups
 and permitted claims on that same attempt. It then evaluates the
 network's Connect descriptor using the advisory access-check API.
+It then selects a complete access profile through PNP's shared tree machinery.
+Profile selection cannot bypass the Connect check or accounting allowances.
+See [Access Assignment](~peios/reference/radius/access-assignment).
 
 Only an explicit `Engine::finish` admission result can deliver success
 and keys. It rechecks the deadline, source/client/network binding, and

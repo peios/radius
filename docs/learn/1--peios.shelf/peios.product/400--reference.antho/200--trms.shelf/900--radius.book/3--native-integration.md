@@ -183,6 +183,8 @@ bash /mnt/dev/native/qualify.sh
 bash /mnt/dev/native/mschapv2.sh
 bash /mnt/dev/native/administration.sh
 bash /mnt/dev/native/initialize.sh
+bash /mnt/dev/native/assignment.sh
+bash /mnt/dev/native/migrate-policy.sh
 ```
 
 The independent supplicant runs inside the guest against loopback UDP.

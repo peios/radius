@@ -45,6 +45,7 @@ fn check(subject: &Authenticated, text: &str) -> Result<(), Reason> {
         subject,
         "qualification",
         &Network {
+            access: std::sync::Arc::new(radius_policy::Policy::compile(&[], &[]).unwrap()),
             enabled: true,
             tls: None,
             tls_tag: [0; 32],
@@ -57,6 +58,53 @@ fn check(subject: &Authenticated, text: &str) -> Result<(), Reason> {
             reauthenticate_seconds: 3600,
         },
     )
+}
+
+#[test]
+fn assignment_facts_preserve_authority_types_and_hide_disabled_deny_only_claims() {
+    use radius_policy::Scalar;
+    use radiusd::{driver::Backend, native::authentication::Auth};
+    let mut s = subject();
+    s.claim_coverage = ClaimCoverage::Filtered;
+    s.identity.fields.insert(
+        fields::CLAIMS,
+        Field::Claims(vec![
+            Claim {
+                name: "Unsigned".into(),
+                flags: 0,
+                value_type: 2,
+                values: vec![ClaimValue::Unsigned(u64::MAX)],
+            },
+            Claim {
+                name: "Signed".into(),
+                flags: 0,
+                value_type: 1,
+                values: vec![ClaimValue::Signed(i64::MIN)],
+            },
+            Claim {
+                name: "Disabled".into(),
+                flags: 16,
+                value_type: 6,
+                values: vec![ClaimValue::Boolean(true)],
+            },
+            Claim {
+                name: "DenyOnly".into(),
+                flags: 4,
+                value_type: 6,
+                values: vec![ClaimValue::Boolean(true)],
+            },
+        ]),
+    );
+    let facts = Auth.policy_facts(&s).unwrap();
+    assert_eq!(
+        facts["Subject.Claim.Unsigned"],
+        vec![Scalar::Uint64(u64::MAX)]
+    );
+    assert_eq!(facts["Subject.Claim.Signed"], vec![Scalar::Int64(i64::MIN)]);
+    assert!(!facts.contains_key("Subject.Claim.Disabled"));
+    assert!(!facts.contains_key("Subject.Claim.DenyOnly"));
+    assert!(!facts.contains_key("Subject.Claim.Secret"));
+    assert_eq!(facts["Subject.Group"], vec![Scalar::Sid(GROUP.into())]);
 }
 #[test]
 #[ignore = "requires a disposable Peios guest"]

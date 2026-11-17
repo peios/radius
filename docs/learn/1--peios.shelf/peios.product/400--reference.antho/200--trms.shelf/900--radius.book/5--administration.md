@@ -11,19 +11,20 @@ radius --window
 
 Both interfaces use the same management library and the caller's actual
 permissions. Configuration is stored directly in the local Registry, so
-editing works while radiusd is stopped. The daemon's local status endpoint
-is read-only. There is no remote management listener. Use an SSH session
-for a remote CLI; a GXWI desktop can present the window remotely.
+editing works while radiusd is stopped. The daemon's local status endpoint is
+read-only. There is no remote management listener. Use an SSH session for a
+remote CLI; a GXWI desktop can present the window remotely.
 
 ## Configuration objects
 
-The window has five areas: Overview, Clients, Access Policies,
-Authentication Profiles, and Server Identities.
+The window groups authentication, assignment, and accounting administration
+into separate sections. Overview reports service and configuration activation
+state.
 
 Overview's listener field starts with the saved addresses. Background
-refreshes follow external changes while the field is unchanged, preserving
-an edit in progress. The saved value shown below the field remains separate
-from the draft.
+refreshes follow external changes while the field is unchanged, preserving an
+edit in progress. The saved value shown below the field remains separate from
+the draft.
 
 | Object | Purpose |
 |---|---|
@@ -31,6 +32,8 @@ from the draft.
 | Access policy | Exact SSID, Connect permissions, profile, and reauthentication |
 | Authentication profile | Ordered allowed methods and server identity |
 | Server identity | Named certificate chain and matching private key |
+| Access profile | Complete assignment settings, including an optional VLAN |
+| Assignment rule | Policy-owned conditions, action, priority, and exceptions |
 
 Objects have immutable GUIDs. Names are editable labels and can be duplicated;
 an ambiguous CLI name requires a GUID. References always use GUIDs. Renaming
@@ -46,22 +49,27 @@ radius client list
 radius policy list
 radius profile list
 radius identity list
+radius access-profile list
+radius rule list
 radius config check
 ```
 
 `radius --help` lists commands. `--json` produces structured output, including
 GUIDs and typed errors. Exit status is 0 for success, 64 for invalid
-arguments,
-3 for denied permission, 4 for a missing object, 5 for invalid configuration,
-and 1 for other failures. Explicit secret output is raw bytes and does not
-accept `--json`.
+arguments, 3 for denied permission, 4 for a missing object, 5 for invalid
+configuration, and 1 for other failures. Explicit secret output is raw bytes
+and does not accept `--json`.
+
+See [Access Assignment](~peios/reference/radius/access-assignment) for profile
+selection, rule editing, explicit defaults and hypothetical policy
+explanations.
 
 ## Initial setup
 
 `radius config init` initializes an absent configuration with schema version
 2, empty object collections, and a UDP listener at `0.0.0.0:1812`. It refuses
-an existing deployment. The empty configuration admits nobody. Configure
-the service identity, authd capability, and port reservation separately as
+an existing deployment. The empty configuration admits nobody. Configure the
+service identity, authd capability, and port reservation separately as
 described in [Native Integration](~peios/reference/radius/native-integration).
 
 Create a server identity first, then a profile, policy, and client. In the
@@ -106,16 +114,16 @@ radius client secret AccessPoints set --file /protected/shared-secret
 radius client secret AccessPoints generate
 ```
 
-A generated replacement also needs updating on the corresponding client.
-The policy's reauthentication interval defaults to 3600 seconds.
+A generated replacement also needs updating on the corresponding client. The
+policy's reauthentication interval defaults to 3600 seconds.
 
 ## Permissions and credentials
 
-Connect permissions decide whether an authenticated subject can use a
-policy. Management permissions are the ordinary Registry key descriptor
-controlling who can edit it. The window opens the existing security
-descriptor editor for each, under separate controls. The CLI exposes their
-descriptors without a separate permission language:
+Connect permissions decide whether an authenticated subject can use a policy.
+Management permissions are the ordinary Registry key descriptor controlling
+who can edit it. The window opens the existing security descriptor editor for
+each, under separate controls. The CLI exposes their descriptors without a
+separate permission language:
 
 ```sh
 radius policy permissions Household connect
@@ -126,15 +134,15 @@ Add an SDDL argument to set a descriptor. Configuration-write rights,
 credential-file read rights, service-control rights, and local-status query
 rights remain independent. The default status descriptor permits SYSTEM and
 Administrators. An explicit `Settings\StatusSecurity` can change that policy;
-malformed or unreadable explicit values deny queries. The endpoint checks
-the kernel-attested peer token, including deny-only groups.
+malformed or unreadable explicit values deny queries. The endpoint checks the
+kernel-attested peer token, including deny-only groups.
 
 Certificate import accepts PEM or DER and verifies that the key matches the
 leaf certificate. The window shows certificate subject, issuer, DNS names,
 validity dates, and fingerprint. Import paths refer to files on the Peios
-machine, including when the window is presented remotely. The program does
-not issue certificates or replace a CA. Replacing an identity preserves its
-GUID and dependent profile references:
+machine, including when the window is presented remotely. The program does not
+issue certificates or replace a CA. Replacing an identity preserves its GUID
+and dependent profile references:
 
 ```sh
 radius identity inspect Main
@@ -150,15 +158,15 @@ deleting a record does not erase credential files automatically.
 ## Saving, activation, and recovery
 
 Saving updates stored configuration. It does not claim the daemon activated
-it. Overview shows saved and effective fingerprints and activation issues.
-The daemon independently validates direct Registry edits. A broken reference,
-bad descriptor, or unreadable credential pauses admissions until repaired;
-the old policy is not silently kept active. The local status endpoint remains
+it. Overview shows saved and effective fingerprints and activation issues. The
+daemon independently validates direct Registry edits. A broken reference, bad
+descriptor, or unreadable credential pauses admissions until repaired; the old
+policy is not silently kept active. The local status endpoint remains
 available even when initial configuration is invalid.
 
 The tools preserve malformed records for inspection and repair. Direct
-Registry editing can bypass deletion safeguards. Related management writes
-are transactional; there is no stale-form conflict detection.
+Registry editing can bypass deletion safeguards. Related management writes are
+transactional; there is no stale-form conflict detection.
 
 Disabled clients, policies, and profiles deny affected admissions while
 unrelated valid policy continues. A disabled shared profile affects every

@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/peios/kernel.git",
+  "base_revision": "abb40fe1d4aa9950582aca1276656ac319354b58",
+  "source_dirty": false,
+  "ownership": "Kernel-owned snapshot. Refresh with tools/sync-pnp-core.py; edit semantic sources in the kernel repository.",
+  "files": {
+    "LICENSES/dual/Apache-2.0": "7e4d3fba250d15e9e0afa380d4b611828fa2560cc8fdebe95bcf2f01a487de12",
+    "LICENSES/preferred/MIT": "323c587d0ccf10e376f8bf9a7f31fb4ca6078105194b42e0b1e0ee2bc9bde71f",
+    "peios/rust/peios-uapi/Cargo.toml": "fb465c8df848b862f86c36ff21853d6ef0fa8f329080164009dfaa0fd68a69c0",
+    "peios/rust/peios-uapi/lib.rs": "e623ce8246cca4de4778d2a507a9774e6344d814dc2b3133e2da20a5f136aab1",
+    "peios/rust/peios-uapi/ztypes.rs": "4eb75f889776a2b54fd71fce0c36737d425b2a6624f9ccdc69b8a1e235efb412",
+    "peios/rust/pnp-core/Cargo.toml": "27a265e157959713601f9930d492d1aa8967014fc4c7c5eef5de6a49ed982336",
+    "peios/rust/pnp-core/lib.rs": "ffd6a911993ea797d87b90df6b9751017722ddeecae0040d5817dafc9f1455b5",
+    "security/pkm/kacs/kacs_core/claim_name.rs": "9d173604f9aa6dd237896e6d430f3bd0eb4d89e01546b36b3125a4d0cd9cc35f",
+    "security/pkm/kacs/peios_uapi.rs": "c16af87b97f5c9d322ede20cd4d23603423e0ad210a0a1caf13720f1f77abdb8",
+    "security/pkm/pnp_core/action.rs": "f3baa67fd3e83de7937ecd71d1d6a5ca68de1f9f31c857132b91c2b21b35d0a0",
+    "security/pkm/pnp_core/condition.rs": "544ab2b8a80278ceda61cd73d2e475571b51c5a1fefefe51acb23e8261bf6500",
+    "security/pkm/pnp_core/error.rs": "0cc98a898e2eee4200e0160e5e1ec27e33b4a97edebc28e4e185d6fbe54a79ff",
+    "security/pkm/pnp_core/eval.rs": "6b4d3a2363db1b0edb80da337f80609b823993ad525e3e864ce933be5f21dd82",
+    "security/pkm/pnp_core/hash.rs": "cf02ecbc4b9ea511a67fb49758c918430040c04e94c07703401dde9d7a3e211c",
+    "security/pkm/pnp_core/ingest.rs": "42f37f655ac27a6cdf1bd9ebf8cbe92ea2976e8716992e0008b8291d680c8407",
+    "security/pkm/pnp_core/machinery.rs": "3e839ecb2d87648ff52de782d5db84fc42e47addb70444b8c31b315deb7722d9",
+    "security/pkm/pnp_core/mod.rs": "ed8cdce825b488cea3b32de7410a02a08d4af0cc5ba78c0cf600ed25b553c61e",
+    "security/pkm/pnp_core/pkm_alloc.rs": "f2e76f4f19673ed381992358e1eea504470619fbfe0811bf5e4a2788bd9eb8ac",
+    "security/pkm/pnp_core/rule.rs": "e5d322975952c181520a24cb8d1f5575c36c2e73923dcf3d43f54f07d54a8034",
+    "security/pkm/pnp_core/sha1.rs": "b4d7ef8357e80b4045386b291081a8baf78e85de97ce3af2d2b11daa41d0555a",
+    "security/pkm/pnp_core/sid.rs": "a27d8dcd2ce963195524473f4d14b3b18588d03e4ef2a8f7a867524bb4149002",
+    "security/pkm/pnp_core/snapshot.rs": "9760ac9ba68bd18394e86c569fe644cbc32e0de32c884c17bb17401893c02ca2",
+    "security/pkm/pnp_core/strutil.rs": "ceb53aa589281a13024eb6360589e2b536ed739e49f380646c3fa5e35ce0f6c0",
+    "security/pkm/pnp_core/value.rs": "663738daaf1d081d9aecab39b1d36893bc3036778821942e817aa13ccaf16648"
+  }
+}

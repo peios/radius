@@ -73,6 +73,9 @@ pub fn initialize() -> io::Result<()> {
             .map_err(io::Error::from)?;
     }
     for kind in Kind::ALL {
+        if kind == Kind::Rule {
+            continue;
+        }
         Key::create(
             Some(&root),
             kind.collection(),
@@ -180,6 +183,14 @@ pub fn save_settings(patch: &Values) -> io::Result<()> {
 /// Validate edited fields and their references, while keeping unrelated broken
 /// objects available for repair. Edits do not claim successful daemon activation.
 pub fn save(record: &Record, patch: &Values, creating: bool) -> io::Result<Record> {
+    save_edit(record, patch, &[], creating)
+}
+pub fn save_edit(
+    record: &Record,
+    patch: &Values,
+    remove: &[String],
+    creating: bool,
+) -> io::Result<Record> {
     for name in patch.keys() {
         if record.kind.field(name).is_none() {
             return Err(io::Error::new(
@@ -190,6 +201,34 @@ pub fn save(record: &Record, patch: &Values, creating: bool) -> io::Result<Recor
     }
     let mut next = record.clone();
     next.values.extend(patch.clone());
+    for name in remove {
+        if !(record.kind.optional(name)
+            || (record.kind == Kind::Rule
+                && record.values.contains_key(name)
+                && !matches!(
+                    name.as_str(),
+                    "Name" | "Enabled" | "Priority" | "Actions" | "Policy" | "Parent"
+                )))
+            || matches!(name.as_str(), "Policy" | "Parent")
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("cannot unset {name}"),
+            ));
+        }
+        next.values.remove(name);
+    }
+    if record.kind == Kind::Rule
+        && !creating
+        && ["Policy", "Parent"]
+            .iter()
+            .any(|k| next.values.get(*k) != record.values.get(*k))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "moving a rule requires creating it at the new parent",
+        ));
+    }
     let mut stored = registry::read()?;
     stored
         .objects
@@ -198,7 +237,10 @@ pub fn save(record: &Record, patch: &Values, creating: bool) -> io::Result<Recor
     let issues: Vec<_> = stored
         .validate()
         .into_iter()
-        .filter(|i| i.object == next.id)
+        .filter(|i| {
+            i.object == next.id
+                || (next.kind == Kind::Rule && Some(i.object.as_str()) == next.text("Policy"))
+        })
         .collect();
     if !issues.is_empty() {
         return Err(io::Error::new(
@@ -216,9 +258,24 @@ pub fn save(record: &Record, patch: &Values, creating: bool) -> io::Result<Recor
     if creating {
         registry::write(&next.path(), &next.values, true)?;
     } else {
-        registry::write(&next.path(), patch, false)?;
+        registry::write_edit(&next.path(), patch, remove, false)?;
     }
     Ok(next)
+}
+
+/// Evaluates saved policy using hypothetical caller-supplied facts. Reading
+/// every referenced Registry key uses the real caller's access rights.
+pub fn explain(selector: &str, facts: &radius_policy::Facts) -> io::Result<serde_json::Value> {
+    let stored = registry::read()?;
+    let policy = stored
+        .resolve(Kind::Policy, selector)
+        .map_err(io::Error::other)?;
+    let compiled = crate::access_policy::compile(&stored, &policy.id).map_err(io::Error::other)?;
+    let explanation = compiled.explain(facts).map_err(io::Error::other)?;
+    Ok(
+        serde_json::json!({"configuration":"saved","fingerprint":stored.fingerprint(),"policy":policy.id,
+        "full_admission_checked":false,"explanation":explanation}),
+    )
 }
 /// Create with generated shared-secret material unless an existing protected
 /// file reference was explicitly supplied. The generated secret is not returned

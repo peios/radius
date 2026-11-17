@@ -160,6 +160,12 @@ impl Sink {
     }
 }
 impl Output for Sink {
+    fn policy_issue(&mut self, id: &[u8; 16], issue: &str) {
+        let attempt = id.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        self.warning(&format!(
+            "assignment refused for attempt {attempt}: {issue}"
+        ));
+    }
     fn discarded(&mut self) {
         self.discarded = self.discarded.saturating_add(1);
         if self.last_discard_report.elapsed() >= Duration::from_secs(5) {

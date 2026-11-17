@@ -17,10 +17,12 @@ usage: radius [--json] [command]
   accounting annotate SESSION-GUID NOTE
   accounting correct-end SESSION-GUID UNIX-MILLISECONDS NOTE --confirm
   accounting rebuild --confirm   rebuild retained evidence without sending actions
-  client|policy|profile|identity|quota|accounting-profile list
+  client|policy|profile|identity|quota|accounting-profile|access-profile|rule list
   KIND show NAME-OR-GUID
   KIND create NAME [--set FIELD=VALUE] ...
   KIND set NAME-OR-GUID [--set FIELD=VALUE] ...
+  KIND unset NAME-OR-GUID FIELD ...  remove optional settings or rule conditions
+  policy explain NAME-OR-GUID --facts PATH  explain saved policy with hypothetical typed JSON facts
   KIND delete NAME-OR-GUID
   KIND enable|disable NAME-OR-GUID  (clients, policies and profiles)
   KIND permissions NAME-OR-GUID connect|management [SDDL]
@@ -98,6 +100,19 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
     use serde_json::json;
     let words: Vec<_> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["policy", "explain", selector, "--facts", path] => {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)?
+                .take(1_048_577)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > 1_048_576 {
+                return Err(usage("hypothetical facts exceed 1 MiB"));
+            }
+            let facts =
+                serde_json::from_slice(&bytes).map_err(|_| usage("invalid typed facts JSON"))?;
+            operations::explain(selector, &facts)
+        }
         ["accounting", "init"] => {
             radius_management::native::accounting::provision_directory()?;
             Ok(json!({"provisioned":true}))
@@ -326,6 +341,12 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
                                 )?,
                                 false,
                             )?;
+                            Ok(json!({"saved":true,"object":record,"activation":"pending"}))
+                        }
+                        ("unset", args) if !args.is_empty() => {
+                            let remove = args.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+                            let record =
+                                operations::save_edit(record, &Values::new(), &remove, false)?;
                             Ok(json!({"saved":true,"object":record,"activation":"pending"}))
                         }
                         ("import", args) if kind == Kind::Identity => {

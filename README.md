@@ -2,7 +2,8 @@
 
 `radius` is the Peios RADIUS repository. It contains the portable `radius-core`
 library, the native Peios `radiusd` daemon, the shared `radius-management`
-library, the `radius-accounting` ledger, the CLI/GXWI `radius` program, and a
+library, the `radius-policy` PNP adapter, the `radius-accounting` ledger,
+the CLI/GXWI `radius` program, and a
 separate loopback-only `radius-test-server` qualification fixture.
 
 The native adapter uses authd Authenticate without a local logon, reads normal
@@ -48,6 +49,15 @@ accounts. Supplicant output can contain secrets, so the runner captures it and
 reports only case outcomes. Successful cases require both supplicant success
 and actual MPPE key agreement. The server sends a large certificate chain and
 both peers use small fragments.
+
+The assignment adapter uses kernel-owned `pnp-core` sources under `vendor/kernel`.
+`ORIGIN.json` records the source revision and individual hashes. Refresh them
+with `python3 tools/sync-pnp-core.py /path/to/reviewed/kernel`; edit semantic
+sources in the kernel repository. The shared extraction preserves packet and
+interface entry points and introduces no syscall requirement.
+
+See [Access Assignment](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/7--access-assignment.md)
+for explicit default rules, VLAN configuration, typed claims and Explain.
 
 The test-tool builder downloads the pinned upstream wpa_supplicant 2.12 archive,
 checks its SHA-256 and builds only `eapol_test`, using two jobs by default. It
@@ -123,6 +133,11 @@ Proxying, further EAP methods, resumption, and application SSO are outside this
 slice. Network authorization uses the kernel supplied-subject API,
 and configuration uses a public read-only Registry snapshot. Referenced
 credential files are loaded after that snapshot is released.
+
+The disposable `tests/native/assignment.sh` gate checks VLAN assignments,
+conflicting profiles, nested exceptions, direct-edit recovery and claim
+disclosure. `tests/native/migrate-policy.sh` checks the schema migration's dry
+run, transaction rollback, explicit no-override defaults and authentication.
 
 ## Accounting
 

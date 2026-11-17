@@ -61,6 +61,9 @@ fn read_once() -> io::Result<Stored> {
         ..Default::default()
     };
     for kind in Kind::ALL {
+        if kind == Kind::Rule {
+            continue;
+        }
         let path = format!("{ROOT}\\{}", kind.collection());
         let parent = match open(&path, &transaction) {
             Ok(v) => v,
@@ -81,8 +84,90 @@ fn read_once() -> io::Result<Stored> {
             });
         }
     }
+    let policies: Vec<_> = stored
+        .objects
+        .iter()
+        .filter(|r| r.kind == Kind::Policy)
+        .map(|r| r.id.clone())
+        .collect();
+    for policy in policies {
+        let path = format!("{ROOT}\\AccessPolicies\\{policy}\\Rules");
+        match open(&path, &transaction) {
+            Ok(key) => read_rules(&key, &path, &policy, "", 0, &transaction, &mut stored)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
     stored.objects.sort_by_key(|a| a.path());
     Ok(stored)
+}
+fn read_rules(
+    key: &Key,
+    path: &str,
+    policy: &str,
+    parent: &str,
+    depth: usize,
+    tx: &Transaction,
+    stored: &mut Stored,
+) -> io::Result<()> {
+    for entry in key.subkeys(Some(tx)) {
+        if depth > radius_policy::MAX_DEPTH {
+            return Err(io::Error::other("rule depth exceeds limits"));
+        }
+        if stored
+            .objects
+            .iter()
+            .filter(|r| r.kind == Kind::Rule)
+            .count()
+            >= radius_policy::MAX_RULES
+        {
+            return Err(io::Error::other("too many rules"));
+        }
+        let entry = entry.map_err(io::Error::from)?;
+        let id =
+            String::from_utf8(entry.name).map_err(|_| io::Error::other("rule key is not UTF-8"))?;
+        if !crate::model::valid_id(&id) {
+            return Err(io::Error::other("rule key must be a canonical GUID"));
+        }
+        if stored
+            .objects
+            .iter()
+            .any(|r| r.kind == Kind::Rule && r.id == id)
+        {
+            return Err(io::Error::other("duplicate rule GUID"));
+        }
+        let child_path = format!("{path}\\{id}");
+        let child = open(&child_path, tx)?;
+        let mut data = values(&child, tx)?;
+        let prior: usize = stored
+            .objects
+            .iter()
+            .filter(|r| r.kind == Kind::Rule)
+            .map(|r| crate::access_policy::value_bytes(&r.values))
+            .sum();
+        if prior + crate::access_policy::value_bytes(&data) > radius_policy::MAX_POLICY_BYTES {
+            return Err(io::Error::other("rule values exceed byte limit"));
+        }
+        if data.contains_key("Policy") || data.contains_key("Parent") {
+            return Err(io::Error::other(
+                "Policy and Parent are derived rule metadata, not stored values",
+            ));
+        }
+        data.insert("Policy".into(), Value::Text(policy.into()));
+        data.insert("Parent".into(), Value::Text(parent.into()));
+        stored.objects.push(Record {
+            kind: Kind::Rule,
+            id: id.clone(),
+            values: data,
+        });
+        let nested = if parent.is_empty() {
+            id
+        } else {
+            format!("{parent}/{id}")
+        };
+        read_rules(&child, &child_path, policy, &nested, depth + 1, tx, stored)?;
+    }
+    Ok(())
 }
 fn encoded(value: &Value) -> io::Result<Data> {
     Ok(match value {
@@ -97,8 +182,35 @@ fn encoded(value: &Value) -> io::Result<Data> {
 }
 /// Set only supplied fields, preserving other values and the key's descriptor.
 pub fn write(path: &str, values: &Values, creating: bool) -> io::Result<()> {
+    write_edit(path, values, &[], creating)
+}
+pub fn write_edit(
+    path: &str,
+    values: &Values,
+    remove: &[String],
+    creating: bool,
+) -> io::Result<()> {
     let tx = Transaction::begin().map_err(io::Error::from)?;
-    let access = KeyAccess::SET_VALUE | KeyAccess::QUERY_VALUE;
+    let access = KeyAccess::SET_VALUE
+        | KeyAccess::QUERY_VALUE
+        | if creating {
+            KeyAccess::CREATE_SUB_KEY
+        } else {
+            KeyAccess::empty()
+        };
+    let rule = path.contains("\\Rules\\");
+    if creating && rule {
+        let (policy, _) = path.split_once("\\Rules\\").unwrap();
+        Key::create(
+            None,
+            &format!("{policy}\\Rules"),
+            KeyAccess::CREATE_SUB_KEY,
+            CreateFlags::empty(),
+            None,
+            Some(&tx),
+        )
+        .map_err(io::Error::from)?;
+    }
     let key = if creating {
         let (key, created) = Key::create(None, path, access, CreateFlags::empty(), None, Some(&tx))
             .map_err(io::Error::from)?;
@@ -114,10 +226,17 @@ pub fn write(path: &str, values: &Values, creating: bool) -> io::Result<()> {
             .map_err(io::Error::from)?
     };
     for (name, value) in values {
+        if rule && matches!(name.as_str(), "Policy" | "Parent") {
+            continue;
+        }
         let data = encoded(value)?;
         key.set_value(name.as_bytes(), data.ty(), &data.encode())
             .in_txn(&tx)
             .call()
+            .map_err(io::Error::from)?;
+    }
+    for name in remove {
+        key.delete_value(name.as_bytes(), None, Some(&tx))
             .map_err(io::Error::from)?;
     }
     tx.commit().map_err(Into::into)
@@ -134,9 +253,35 @@ pub fn remove(record: &Record) -> io::Result<()> {
                 .join(", ")
         )));
     }
-    let key = Key::open(None, &record.path(), KeyAccess::DELETE, OpenFlags::empty())
-        .map_err(io::Error::from)?;
     let tx = Transaction::begin().map_err(io::Error::from)?;
+    let key = Key::open_transacted(
+        None,
+        &record.path(),
+        KeyAccess::DELETE,
+        OpenFlags::empty(),
+        Some(&tx),
+    )
+    .map_err(io::Error::from)?;
+    if record.kind == Kind::Policy {
+        // Removing the last rule leaves its structural container behind.
+        // Delete only an empty container, in the same transaction as its
+        // policy. Unexpected or concurrently created children must survive.
+        match Key::open_transacted(
+            None,
+            &format!("{}\\Rules", record.path()),
+            KeyAccess::DELETE,
+            OpenFlags::empty(),
+            Some(&tx),
+        ) {
+            Ok(rules) => rules.delete_key(None, Some(&tx)).map_err(io::Error::from)?,
+            Err(error) => {
+                let error = io::Error::from(error);
+                if error.kind() != io::ErrorKind::NotFound {
+                    return Err(error);
+                }
+            }
+        }
+    }
     key.delete_key(None, Some(&tx)).map_err(io::Error::from)?;
     tx.commit().map_err(Into::into)
 }

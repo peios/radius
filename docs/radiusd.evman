@@ -78,7 +78,7 @@ field: object.account.sid                   optional
   Present together with the canonical name; the verified user's SID.
 field: outcome.success                      required
 field: outcome.reason                       when outcome.success == false
-  values: authentication-failed | permission-denied | missing-context | authority-unavailable | kernel-api-unavailable | access-check-error | conversation-limit | timed-out | binding-changed | protocol-error | undelivered
+  values: authentication-failed | permission-denied | missing-context | authority-unavailable | kernel-api-unavailable | access-check-error | conversation-limit | timed-out | binding-changed | protocol-error | undelivered | allowance-exhausted | accounting-unavailable
   closed: false
 
 --- event radiusd.configuration.loaded
@@ -100,3 +100,23 @@ field: outcome.success                      required
 field: outcome.reason                       when outcome.success == false
   values: invalid-or-unavailable
   closed: false
+
+--- event radiusd.accounting.health.changed
+tier: standard
+gating: accounting health observed at five-second intervals
+cardinality: once on the first observation and each observed health transition
+
+Accounting availability changed.
+
+Success means accounting is off or its validated listeners and ledger are
+available. It does not establish that a device delivered every report.
+Failure covers invalid configuration, unavailable listeners, and storage
+failures. Inspect the protected local accounting status for diagnostics.
+
+The event contains the service actor and health outcome only. Personal
+accounting history, identifiers, addresses, and usage remain in the protected
+ledger. Rebuild does not replay this event. Submission is best effort.
+
+field: subject.token.sid                    required
+  The radiusd service account, never a network user's SID.
+field: outcome.success                      required

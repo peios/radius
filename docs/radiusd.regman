@@ -346,3 +346,410 @@ complete candidate. radiusd pauses admission rather than keeping old policy
 active, while its local status endpoint remains available for diagnosis and
 repair. Intentionally disabled, otherwise valid objects do not invalidate
 unrelated policy. Direct Registry edits can bypass management deletion checks.
+
+--- machine\software\radius\settings accountingenabled
+canonical: Machine\Software\Radius\Settings AccountingEnabled
+type: REG_DWORD
+default: 0
+valid: 0 or 1
+applies: live
+
+Whether the durable accounting service receives reports.
+
+The private directory and accounting UDP port permission must be provisioned before activation.
+
+--- machine\software\radius\settings accountinglisten
+canonical: Machine\Software\Radius\Settings AccountingListen
+type: REG_MULTI_SZ
+default: 0.0.0.0:1813
+valid: 1–16 literal, nonoverlapping IPv4 or IPv6 socket addresses
+applies: live
+
+Accounting UDP listener addresses.
+
+IPv6 sockets are IPv6-only. Mapped addresses, duplicate listeners, overlapping wildcard bindings, and zero ports are refused.
+
+--- machine\software\radius\settings accountingsettings
+canonical: Machine\Software\Radius\Settings AccountingSettings
+type: REG_SZ
+default: {}
+valid: versioned Settings JSON with known fields and validated bounds
+applies: live
+
+Grouped accounting controls.
+
+Individual Accounting values override the corresponding JSON fields. AccountingEnabled supplies the final enabled state. Unknown JSON fields are refused.
+
+--- machine\software\radius\settings accountingsecurity
+canonical: Machine\Software\Radius\Settings AccountingSecurity
+type: REG_SZ or REG_BINARY
+default: O:SYG:SYD:(A;;0x3f;;;SY)(A;;0x3f;;;BA)
+valid: SDDL or validated self-relative SD with owner
+applies: live
+
+Default authority for protected accounting operations.
+
+Rights are Read 0x1, Personal 0x2, Usage 0x4, Disconnect 0x8, Correct 0x10, and Raw 0x20. Policy descriptors can delegate a narrower scope. Orphaned history uses this descriptor.
+
+--- machine\software\radius\settings accountingselfservice
+canonical: Machine\Software\Radius\Settings AccountingSelfService
+type: REG_DWORD
+default: 0
+valid: 0 or 1
+applies: live
+
+Whether verified caller identity grants personal accounting views.
+
+The actual peer token SID must match verified session identity. This grants no Disconnect, Correct, Raw, global status, or direct ledger-file access.
+
+--- machine\software\radius\settings accountingbatchmilliseconds
+canonical: Machine\Software\Radius\Settings AccountingBatchMilliseconds
+type: REG_DWORD or REG_SZ
+default: 1000
+valid: 1–5000 milliseconds
+applies: live
+
+Maximum intentional wait before a pending report batch is committed.
+
+The timer starts when the oldest report is queued. Count and byte pressure or another owner operation can flush earlier. Slow storage adds latency beyond this intentional wait.
+
+--- machine\software\radius\settings accountingbatchcount
+canonical: Machine\Software\Radius\Settings AccountingBatchCount
+type: REG_DWORD or REG_SZ
+default: 512
+valid: 1–10000 reports, no greater than AccountingQueueCount
+applies: live
+
+Maximum reports in one durable transaction.
+
+Increasing the value amortizes synchronization but increases batch work and reply bursts.
+
+--- machine\software\radius\settings accountingbatchbytes
+canonical: Machine\Software\Radius\Settings AccountingBatchBytes
+type: REG_DWORD or REG_SZ
+default: 1048576
+valid: 4096–67108864 bytes
+applies: live
+
+Maximum serialized observation bytes in one batch.
+
+An observation exceeding this bound is refused without acknowledgment. This bounds serialized observations, not every allocator or SQLite buffer.
+
+--- machine\software\radius\settings accountingqueuecount
+canonical: Machine\Software\Radius\Settings AccountingQueueCount
+type: REG_DWORD or REG_SZ
+default: 4096
+valid: 1–65536 operations, at least AccountingBatchCount
+applies: restart
+
+Bound on queued ledger operations and pending UDP replies.
+
+The queue is allocated at process startup. A live change remains unavailable until restart. Overflow produces no success accounting reply.
+
+--- machine\software\radius\settings accountingmaxdatabasebytes
+canonical: Machine\Software\Radius\Settings AccountingMaxDatabaseBytes
+type: REG_DWORD or REG_SZ
+default: 1073741824
+valid: 1048576–1125899906842624 bytes
+applies: live
+
+Limit on database pages used for admissions and report commits.
+
+WAL, shared memory, and filesystem overhead require additional space. Free pages remain reusable. Lowering the value does not shrink allocated files. Preserve storage headroom for maintenance and recovery.
+
+--- machine\software\radius\settings accountingretryhorizonseconds
+canonical: Machine\Software\Radius\Settings AccountingRetryHorizonSeconds
+type: REG_DWORD or REG_SZ
+default: 86400
+valid: 1–2592000 seconds
+applies: live
+
+Minimum retained semantic retry window.
+
+Observation retention must cover this window. Changed identifiers and Acct-Delay-Time do not necessarily describe a new usage report.
+
+--- machine\software\radius\settings accountingobservationretentionseconds
+canonical: Machine\Software\Radius\Settings AccountingObservationRetentionSeconds
+type: REG_DWORD or REG_SZ
+default: 604800
+valid: retry horizon through summary retention, in seconds
+applies: live
+
+Age at which detailed observations become eligible for checkpointed expiry.
+
+Maintenance removes bounded chunks. Quota evidence remains separate from personal history.
+
+--- machine\software\radius\settings accountingsummaryretentionseconds
+canonical: Machine\Software\Radius\Settings AccountingSummaryRetentionSeconds
+type: REG_DWORD or REG_SZ
+default: 7776000
+valid: observation retention through 316224000 seconds
+applies: live
+
+Retention period for ended personal session summaries.
+
+Active sessions remain until actual or inferred end. Lifetime quota evidence can outlive summaries.
+
+--- machine\software\radius\settings accountingdetailintervalseconds
+canonical: Machine\Software\Radius\Settings AccountingDetailIntervalSeconds
+type: REG_DWORD or REG_SZ
+default: 0
+valid: 0 through summary retention, in seconds
+applies: live
+
+Coarseness of Interim history views.
+
+Zero returns unsampled retained detail. A positive value returns the latest Interim per time bucket within the bounded query. Ingestion, retry evidence, and live quota interpretation remain exact.
+
+--- machine\software\radius\settings accountingstaleseconds
+canonical: Machine\Software\Radius\Settings AccountingStaleSeconds
+type: REG_DWORD or REG_SZ
+default: 1800
+valid: 60 through AccountingExpireSeconds
+applies: live
+
+Report silence before an active session is marked stale.
+
+Stale sessions continue consuming concurrent slots and time allowances until evidence or inferred expiration closes them.
+
+--- machine\software\radius\settings accountingexpireseconds
+canonical: Machine\Software\Radius\Settings AccountingExpireSeconds
+type: REG_DWORD or REG_SZ
+default: 86400
+valid: AccountingStaleSeconds through 316224000 seconds
+applies: live
+
+Report silence before an inferred session end.
+
+An inferred end is uncertain evidence, not a factual Stop.
+
+--- machine\software\radius\settings accountingreservationseconds
+canonical: Machine\Software\Radius\Settings AccountingReservationSeconds
+type: REG_DWORD or REG_SZ
+default: 120
+valid: 10–3600 seconds
+applies: live
+
+Lifetime of an admission reservation without a session report.
+
+Reservations commit before Access-Accept and prevent concurrent admissions from spending the same final slot.
+
+--- machine\software\radius\settings accountingrequiremessageauthenticator
+canonical: Machine\Software\Radius\Settings AccountingRequireMessageAuthenticator
+type: REG_DWORD or REG_SZ
+default: 0
+valid: 0 or 1
+applies: live
+
+Whether accounting requests must include Message-Authenticator.
+
+Request-Authenticator is always verified. A supplied Message-Authenticator is always checked even when this control is zero.
+
+--- machine\software\radius\settings accountingrawcapture
+canonical: Machine\Software\Radius\Settings AccountingRawCapture
+type: REG_DWORD or REG_SZ
+default: 0
+valid: 0 or 1
+applies: live
+
+Whether development packet capture stores authenticated accounting packets.
+
+Capture is separately bounded and requires names and attributes retention. Known credential and key attributes are refused before any observation is recorded.
+
+--- machine\software\radius\settings accountingrawretentionseconds
+canonical: Machine\Software\Radius\Settings AccountingRawRetentionSeconds
+type: REG_DWORD or REG_SZ
+default: 3600
+valid: 0–86400 seconds
+applies: live
+
+Maximum age of development packet captures.
+
+Maintenance removes eligible captures. This does not change normalized observation retention.
+
+--- machine\software\radius\settings accountingrawmaxbytes
+canonical: Machine\Software\Radius\Settings AccountingRawMaxBytes
+type: REG_DWORD or REG_SZ
+default: 67108864
+valid: 0 through half AccountingMaxDatabaseBytes
+applies: live
+
+Maximum payload bytes retained as development packet captures.
+
+Capture stops at the bound; accounting processing continues. Storage page overhead is additional.
+
+--- machine\software\radius\settings accountinglinkedviews
+canonical: Machine\Software\Radius\Settings AccountingLinkedViews
+type: REG_DWORD or REG_SZ
+default: 0
+valid: 0 or 1
+applies: live
+
+Whether related-session views can link verified principal occurrences.
+
+Original session legs remain distinct. Linking uses verified identity and caller scope, never a reported username alone.
+
+--- machine\software\radius\settings accountingretainnames
+canonical: Machine\Software\Radius\Settings AccountingRetainNames
+type: REG_DWORD or REG_SZ
+default: 1
+valid: 0 or 1
+applies: live
+
+Whether future observations and grants retain account display names.
+
+Turning this off removes reported usernames and canonical names from future ingest. It does not erase old records or SID-based quota evidence.
+
+--- machine\software\radius\settings accountingretainattributes
+canonical: Machine\Software\Radius\Settings AccountingRetainAttributes
+type: REG_DWORD or REG_SZ
+default: 1
+valid: 0 or 1
+applies: live
+
+Whether future observations retain opaque attribute detail.
+
+Normalized session fields remain available. Turning this off is incompatible with raw capture and does not erase earlier detail.
+
+--- machine\software\radius\clients\<client> accountingprofile
+canonical: Machine\Software\Radius\Clients\<client> AccountingProfile
+type: REG_SZ
+default: (absent)
+valid: enabled accounting-profile GUID or empty
+applies: live
+
+Declarative accounting normalization profile.
+
+An absent or empty reference uses standard attributes. Rules cannot execute code or bypass peer integrity.
+
+--- machine\software\radius\clients\<client> disconnectport
+canonical: Machine\Software\Radius\Clients\<client> DisconnectPort
+type: REG_DWORD
+default: 3799
+valid: 1–65535
+applies: live
+
+UDP destination port for administrative and allowance-triggered Disconnect.
+
+The destination address comes from the recorded source and must remain admitted by the same client prefix.
+
+--- machine\software\radius\accesspolicies\<policy> servicekind
+canonical: Machine\Software\Radius\AccessPolicies\<policy> ServiceKind
+type: REG_SZ
+default: wifi
+valid: wifi, accounting-only, or empty
+applies: live
+
+Service represented by an access policy.
+
+Accounting-only policies need no SSID, Connect descriptor, or authentication profile. They accept accounting reports without implementing another authentication service.
+
+--- machine\software\radius\accesspolicies\<policy> accountingrequired
+canonical: Machine\Software\Radius\AccessPolicies\<policy> AccountingRequired
+type: REG_DWORD
+default: 0
+valid: 0 or 1
+applies: live
+
+Whether new admissions require available accounting.
+
+Applicable principal allowances also require checked accounting unless the explicit outage mode permits bypass.
+
+--- machine\software\radius\accesspolicies\<policy> onaccountingunavailable
+canonical: Machine\Software\Radius\AccessPolicies\<policy> OnAccountingUnavailable
+type: REG_SZ
+default: deny-new
+valid: deny-new or allow-new
+applies: live
+
+Admission behavior when required accounting or applicable limits are unavailable.
+
+Deny-new refuses admission. Allow-new permits admission without a reliable allowance check or reservation and increments a bypass counter. Neither mode acknowledges lost reports or creates a false Class mapping.
+
+--- machine\software\radius\accesspolicies\<policy> accountingsecurity
+canonical: Machine\Software\Radius\AccessPolicies\<policy> AccountingSecurity
+type: REG_SZ or REG_BINARY
+default: (inherit global AccountingSecurity)
+valid: SDDL or validated self-relative SD with owner; empty inherits
+applies: live
+
+Authority for this policy's accounting history and actions.
+
+Read, Personal, Usage, Disconnect, Correct, and Raw are independent rights. Registry management and network Connect permissions remain separate.
+
+--- machine\software\radius\quotas\<quota> principal
+canonical: Machine\Software\Radius\Quotas\<quota> Principal
+type: REG_SZ
+default: (required)
+valid: canonical user or group SID
+applies: live
+
+Principal charged by an allowance.
+
+Every applicable user and group allowance consumes the same attributable usage independently. Membership comes from verified authentication provenance.
+
+--- machine\software\radius\quotas\<quota> policy
+canonical: Machine\Software\Radius\Quotas\<quota> Policy
+type: REG_SZ
+default: (required)
+valid: existing policy GUID or *
+applies: live
+
+Scope of an allowance.
+
+An asterisk shares the allowance across policies. Delegated policy queries do not expose the global allowance.
+
+--- machine\software\radius\quotas\<quota> dimension
+canonical: Machine\Software\Radius\Quotas\<quota> Dimension
+type: REG_SZ
+default: (required)
+valid: input-bytes, output-bytes, total-bytes, total-session-time, connected-time, concurrent
+applies: live
+
+Resource counted by an allowance.
+
+Time dimensions use milliseconds. Total session time sums intervals; connected time unions them. Concurrent counts active and stale sessions plus unconsumed admission reservations.
+
+--- machine\software\radius\quotas\<quota> period
+canonical: Machine\Software\Radius\Quotas\<quota> Period
+type: REG_SZ
+default: (required)
+valid: lifetime, day, week, month
+applies: live
+
+Calendar for an allowance.
+
+Periods use UTC. Weeks start Monday. Concurrent permits lifetime only. Byte deltas spanning boundaries carry uncertain attribution.
+
+--- machine\software\radius\quotas\<quota> maximum
+canonical: Machine\Software\Radius\Quotas\<quota> Maximum
+type: REG_SZ
+default: (required)
+valid: exact unsigned decimal through 18446744073709551615
+applies: live
+
+Maximum resource amount in an allowance period.
+
+Zero denies the resource. Allowances do not add together; all applicable constraints must pass.
+
+--- machine\software\radius\quotas\<quota> disconnect
+canonical: Machine\Software\Radius\Quotas\<quota> Disconnect
+type: REG_DWORD
+default: 1
+valid: 0 or 1
+applies: live
+
+Whether exhausted allowances request Disconnect for ongoing sessions.
+
+Requests use durable bounded attempts. An ACK does not establish that a device ended its session.
+
+--- machine\software\radius\accountingprofiles\<profile> definition
+canonical: Machine\Software\Radius\AccountingProfiles\<profile> Definition
+type: REG_SZ
+default: (required)
+valid: version 1 JSON, at most 65536 bytes, 32 rules and 128 dictionary entries
+applies: live
+
+Bounded declarative accounting normalization rules.
+
+Rules select standard or vendor attributes, decode bytes or unsigned integers, map bounded numeric values, and supply or replace named normalized fields. Targets and dictionary selectors must be unique. Executable plugins are not supported.

@@ -65,7 +65,7 @@ fn query_allowed(stream: &UnixStream) -> bool {
     .check()
     .is_ok_and(|r| r.allowed)
 }
-fn protect(path: &std::path::Path, directory: bool) -> io::Result<()> {
+pub(super) fn protect(path: &std::path::Path, directory: bool) -> io::Result<()> {
     // The runtime directory stays service-owned. Other callers can traverse it
     // to connect; status authorization is a separate real-token access check.
     let rights = if directory { "GX" } else { "GRGWGX" };

@@ -165,7 +165,6 @@ impl Config {
                 || client.addresses.is_empty()
                 || client.addresses.len() > 256
                 || (client.enabled && !(16..=1024).contains(&client.secret.len()))
-                || client.networks.is_empty()
                 || client.networks.len() > 256
             {
                 return Err("invalid client");

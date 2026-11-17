@@ -182,6 +182,31 @@ pub(crate) fn response_with_reauthentication(
     msk: Option<&[u8]>,
     reauthenticate_seconds: Option<u32>,
 ) -> Result<Vec<u8>, Error> {
+    response_with_class(
+        request_id,
+        request_auth,
+        secret,
+        code,
+        eap,
+        state,
+        msk,
+        reauthenticate_seconds,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn response_with_class(
+    request_id: u8,
+    request_auth: &[u8; 16],
+    secret: &[u8],
+    code: u8,
+    eap: &[u8],
+    state: Option<[u8; 16]>,
+    msk: Option<&[u8]>,
+    reauthenticate_seconds: Option<u32>,
+    class: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
     let mut out = vec![code, request_id, 0, 0];
     out.extend_from_slice(request_auth);
     // First attribute: strict MA, including for Reject and Challenge.
@@ -191,6 +216,12 @@ pub(crate) fn response_with_reauthentication(
     }
     if let Some(state) = state {
         attribute(&mut out, 24, &state)?;
+    }
+    if let Some(class) = class {
+        if code != 2 || class.is_empty() {
+            return Err(Error::Configuration);
+        }
+        attribute(&mut out, 25, class)?;
     }
     if let Some(seconds) = reauthenticate_seconds {
         if code != 2 || seconds == 0 {

@@ -7,6 +7,7 @@ use peios::{
 use radius_core::Reply;
 use std::{
     net::UdpSocket,
+    os::{fd::AsFd, unix::net::UnixDatagram},
     time::{Duration, Instant},
 };
 
@@ -17,6 +18,9 @@ pub struct Sink {
     last_warning: Option<Instant>,
     discarded: u64,
     last_discard_report: Instant,
+    last_accounting: Instant,
+    accounting_health: Option<bool>,
+    metrics: Option<UnixDatagram>,
 }
 impl Sink {
     pub fn new(sockets: Vec<UdpSocket>, actor: Sid) -> peios::Result<Self> {
@@ -27,6 +31,9 @@ impl Sink {
             last_warning: None,
             discarded: 0,
             last_discard_report: Instant::now(),
+            last_accounting: Instant::now() - Duration::from_secs(10),
+            accounting_health: None,
+            metrics: None,
         })
     }
     pub fn warning(&mut self, message: &str) {
@@ -63,6 +70,85 @@ impl Sink {
             w.write_str("reason").write_str("invalid-or-unavailable");
         }
         self.submit(kind, &w);
+    }
+    /// Operational samples deliberately contain no user, station, NAS, policy,
+    /// session, Class or principal labels. Exact usage remains in the ledger.
+    pub fn accounting(&mut self, enabled: bool, status: &radius_accounting::worker::Status) {
+        if self.last_accounting.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        self.last_accounting = Instant::now();
+        let healthy = !enabled || status.available;
+        if self.accounting_health != Some(healthy) {
+            self.accounting_health = Some(healthy);
+            let kind = "radiusd.accounting.health.changed";
+            if matches!(self.policy.enabled(kind, Tier::Standard), Ok(true)) {
+                let mut w = Writer::new();
+                w.write_map(2)
+                    .write_str("subject")
+                    .write_map(1)
+                    .write_str("token")
+                    .write_map(1)
+                    .write_str("sid")
+                    .write_bin(self.actor.as_bytes());
+                w.write_str("outcome")
+                    .write_map(1)
+                    .write_str("success")
+                    .write_bool(healthy);
+                self.submit(kind, &w);
+            }
+        }
+        if self.metrics.is_none() {
+            self.metrics = (|| -> peios::Result<_> {
+                use peios::registry::{Data, Key, KeyAccess, OpenFlags};
+                let key = Key::open(
+                    None,
+                    "Machine\\System\\eventd",
+                    KeyAccess::QUERY_VALUE,
+                    OpenFlags::empty(),
+                )?;
+                let value = key.query_value(b"MetricSocketPath", None)?;
+                let Data::Sz(path) = Data::decode(value.ty, &value.data) else {
+                    return Err(std::io::Error::other("invalid metric socket").into());
+                };
+                let socket = UnixDatagram::unbound()?;
+                socket.set_nonblocking(true)?;
+                peios::token::ImpersonationLevel::set_pass_token(socket.as_fd(), true)?;
+                socket.connect(path)?;
+                Ok(socket)
+            })()
+            .ok();
+        }
+        let samples = [
+            ("enabled", "gauge", u64::from(enabled)),
+            ("available", "gauge", u64::from(status.available)),
+            ("committed", "counter", status.committed),
+            ("duplicates", "counter", status.duplicate),
+            ("failed", "counter", status.failed),
+            ("admission_bypasses", "counter", status.admission_bypasses),
+            ("batches", "counter", status.batches),
+            (
+                "commit_milliseconds",
+                "gauge",
+                status.last_commit_latency_ms,
+            ),
+        ];
+        let mut w = Writer::new();
+        w.write_array(samples.len() as u32);
+        for (name, kind, value) in samples {
+            w.write_map(3)
+                .write_str("name")
+                .write_str(&format!("radiusd.accounting.{name}"))
+                .write_str("type")
+                .write_str(kind)
+                .write_str("value")
+                .write_float(value as f64);
+        }
+        if let (Some(socket), Ok(bytes)) = (&self.metrics, w.to_bytes()) {
+            if socket.send(&bytes).is_err() {
+                self.metrics = None;
+            }
+        }
     }
     fn submit(&mut self, kind: &str, w: &Writer) {
         if w.to_bytes()

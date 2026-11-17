@@ -12,6 +12,7 @@ native = ["dep:peios", "dep:peios-auth", "dep:libc", "dep:socket2", "radius-mana
 [dependencies]
 radius-core = { path = "../radius-core" }
 radius-management = { path = "../radius-management" }
+radius-accounting = { path = "../radius-accounting" }
 ring.workspace = true
 rustls.workspace = true
 zeroize.workspace = true

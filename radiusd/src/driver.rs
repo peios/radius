@@ -18,6 +18,8 @@ pub enum Reason {
     Binding,
     Protocol,
     Undelivered,
+    Quota,
+    Accounting,
 }
 impl Reason {
     pub fn name(self) -> &'static str {
@@ -34,6 +36,8 @@ impl Reason {
             Self::Binding => "binding-changed",
             Self::Protocol => "protocol-error",
             Self::Undelivered => "undelivered",
+            Self::Quota => "allowance-exhausted",
+            Self::Accounting => "accounting-unavailable",
         }
     }
 }
@@ -42,6 +46,19 @@ pub enum Progress<S> {
     Mschapv2Challenge([u8; 16]),
     Complete(S),
     Failed(Reason),
+}
+pub struct AdmissionContext<'a> {
+    pub id: [u8; 16],
+    pub client_id: &'a str,
+    pub network_id: &'a str,
+    pub network: &'a Network,
+    pub station: Option<&'a [u8]>,
+    pub saved_fingerprint: &'a str,
+}
+#[derive(Default)]
+pub struct AdmissionExtras {
+    pub class: Option<Vec<u8>>,
+    pub timeout_seconds: Option<u32>,
 }
 pub trait Backend {
     type Work;
@@ -66,6 +83,15 @@ pub trait Backend {
         network: &Network,
     ) -> Result<(), Reason>;
     fn identity<'a>(&self, subject: &'a Self::Subject) -> (&'a str, &'a [u8]);
+    /// None means pending background accounting work, never implicit success.
+    fn accounting(
+        &mut self,
+        _subject: &Self::Subject,
+        _context: AdmissionContext<'_>,
+    ) -> Result<Option<AdmissionExtras>, Reason> {
+        Ok(Some(AdmissionExtras::default()))
+    }
+    fn completed(&mut self, _id: &[u8; 16]) {}
 }
 pub struct Event<'a> {
     pub id: &'a [u8; 16],
@@ -90,6 +116,8 @@ struct Attempt<W, S> {
     work: Option<W>,
     result: Option<Result<S, Reason>>,
     cancelled: bool,
+    station: Option<Vec<u8>>,
+    authorised: Option<([u8; 32], Result<(), Reason>)>,
 }
 pub struct Driver<B: Backend> {
     engine: Engine,
@@ -223,6 +251,8 @@ impl<B: Backend> Driver<B> {
                             work: None,
                             result: None,
                             cancelled: false,
+                            station: request.station.map(Vec::from),
+                            authorised: None,
                         });
                     }
                 }
@@ -336,14 +366,50 @@ impl<B: Backend> Driver<B> {
             let Some((client, network_id, network)) = self.config.bound(&attempt.binding) else {
                 continue;
             };
-            let reason = match &result {
-                Ok(subject) => self
-                    .backend
-                    .admission(subject, network_id, network)
-                    .err()
-                    .unwrap_or(Reason::Granted),
+            let mut reason = match &result {
+                Ok(subject) => {
+                    if attempt
+                        .authorised
+                        .as_ref()
+                        .is_none_or(|(generation, _)| *generation != self.config.fingerprint)
+                    {
+                        attempt.authorised = Some((
+                            self.config.fingerprint,
+                            self.backend.admission(subject, network_id, network),
+                        ));
+                    }
+                    attempt
+                        .authorised
+                        .as_ref()
+                        .unwrap()
+                        .1
+                        .err()
+                        .unwrap_or(Reason::Granted)
+                }
                 Err(reason) => *reason,
             };
+            let mut extras = AdmissionExtras::default();
+            if reason == Reason::Granted && self.engine.final_admission(&id) {
+                match self.backend.accounting(
+                    result.as_ref().unwrap(),
+                    AdmissionContext {
+                        id,
+                        client_id: &client.name,
+                        network_id,
+                        network,
+                        station: attempt.station.as_deref(),
+                        saved_fingerprint: &self.config.saved_fingerprint,
+                    },
+                ) {
+                    Ok(Some(value)) => extras = value,
+                    Ok(None) => {
+                        attempt.result = Some(result);
+                        self.attempts.insert(id, attempt);
+                        continue;
+                    }
+                    Err(error) => reason = error,
+                }
+            }
             let context = Client {
                 binding: attempt.binding.clone(),
                 secret: &client.secret,
@@ -351,7 +417,7 @@ impl<B: Backend> Driver<B> {
                     self.config.fingerprint[..8].try_into().unwrap(),
                 ),
             };
-            let reply = self.engine.finish_with_protocol(
+            let reply = self.engine.finish_with_accounting(
                 now,
                 id,
                 context,
@@ -362,11 +428,18 @@ impl<B: Backend> Driver<B> {
                 } else {
                     Admission::Denied
                 },
-                Some(network.reauthenticate_seconds),
+                Some(
+                    extras
+                        .timeout_seconds
+                        .map_or(network.reauthenticate_seconds, |v| {
+                            v.min(network.reauthenticate_seconds)
+                        }),
+                ),
                 result
                     .as_ref()
                     .ok()
                     .and_then(|subject| self.backend.mschapv2_success(subject)),
+                extras.class.as_deref(),
             );
             if self.engine.has_attempt(&id) {
                 if let Ok(reply) = reply {
@@ -429,6 +502,7 @@ fn emit<B: Backend>(
         sid: identity.map(|(_, sid)| sid),
         reason,
     });
+    backend.completed(id);
 }
 fn reply_state(bytes: &[u8]) -> Option<[u8; 16]> {
     let mut offset = 20;

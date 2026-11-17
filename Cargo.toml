@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius"]
+members = ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius", "radius-accounting"]
 
 [workspace.package]
 version = "0.1.0"

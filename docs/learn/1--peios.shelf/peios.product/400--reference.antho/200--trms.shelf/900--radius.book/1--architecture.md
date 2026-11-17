@@ -99,8 +99,11 @@ are therefore unsuitable without the core's explicit configuration.
 No client certificate is required, but the client validates the server's
 certificate chain and expected identity before disclosing credentials.
 
-Proxy-State, direct outer password methods, accounting, additional EAP
+Proxy-State, direct outer password methods, additional EAP
 methods, and application SSO are outside this slice.
+
+The separate accounting crate owns durable session reports and allowances;
+see [Accounting](~peios/reference/radius/accounting).
 
 ## Resource and retransmission bounds
 

@@ -585,6 +585,36 @@ impl Engine {
         reauthenticate_seconds: Option<u32>,
         mschapv2_success: Option<[u8; 20]>,
     ) -> Result<Reply, Error> {
+        self.finish_with_accounting(
+            now,
+            id,
+            current,
+            admission,
+            reauthenticate_seconds,
+            mschapv2_success,
+            None,
+        )
+    }
+
+    /// True when the next granted finish can produce Access-Accept, rather
+    /// than an intermediate PEAP success exchange. Reserve quota only here.
+    pub fn final_admission(&self, id: &[u8; 16]) -> bool {
+        self.attempts
+            .get(id)
+            .is_some_and(|a| a.method != Method::PeapMschapv2 || a.tunnel.peap_complete())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_with_accounting(
+        &mut self,
+        now: Instant,
+        id: [u8; 16],
+        current: Client<'_>,
+        admission: Admission,
+        reauthenticate_seconds: Option<u32>,
+        mschapv2_success: Option<[u8; 20]>,
+        class: Option<&[u8]>,
+    ) -> Result<Reply, Error> {
         if reauthenticate_seconds == Some(0) {
             return Err(Error::Configuration);
         }
@@ -625,7 +655,7 @@ impl Engine {
         } else {
             None
         };
-        let bytes = wire::response_with_reauthentication(
+        let bytes = wire::response_with_class(
             pending.radius_id,
             &pending.request_auth,
             &pending.secret,
@@ -638,6 +668,7 @@ impl Engine {
             } else {
                 None
             },
+            if granted { class } else { None },
         )?;
         let peer = pending.key.peer;
         self.remember(now, pending.key, bytes.clone());

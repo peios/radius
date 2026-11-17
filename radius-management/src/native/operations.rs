@@ -101,9 +101,34 @@ pub fn parse_field(kind: Kind, name: &str, value: &str) -> io::Result<Value> {
 }
 
 pub fn parse_setting(name: &str, text: &str) -> io::Result<Value> {
+    if crate::accounting::KNOBS.iter().any(|(n, _, _)| *n == name) {
+        return text
+            .parse::<u64>()
+            .map(|n| {
+                if let Ok(n) = u32::try_from(n) {
+                    Value::Number(n)
+                } else {
+                    Value::Text(n.to_string())
+                }
+            })
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "expected exact unsigned decimal",
+                )
+            });
+    }
     match name {
-        "Listen" => Ok(Value::List(text.split(',').map(str::to_owned).collect())),
-        "StatusSecurity" => Ok(Value::Text(text.into())),
+        "Listen" | "AccountingListen" => {
+            Ok(Value::List(text.split(',').map(str::to_owned).collect()))
+        }
+        "StatusSecurity" | "AccountingSecurity" | "AccountingSettings" => {
+            Ok(Value::Text(text.into()))
+        }
+        "AccountingEnabled" | "AccountingSelfService" => text
+            .parse()
+            .map(Value::Number)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "expected 0 or 1")),
         "IdleTimeoutSeconds"
         | "OverallTimeoutSeconds"
         | "ReplyCacheSeconds"
@@ -127,22 +152,29 @@ pub fn parse_setting(name: &str, text: &str) -> io::Result<Value> {
 pub fn save_settings(patch: &Values) -> io::Result<()> {
     for (name, value) in patch {
         // Check that this is a supported, editable setting.
-        parse_setting(
-            name,
-            if matches!(value, Value::Number(_)) {
-                "1"
-            } else {
-                ""
-            },
-        )?;
-        if name == "StatusSecurity" {
+        if !crate::accounting::KNOBS.iter().any(|(n, _, _)| *n == name) {
+            parse_setting(
+                name,
+                if matches!(value, Value::Number(_)) {
+                    "1"
+                } else {
+                    ""
+                },
+            )?;
+        }
+        if name == "StatusSecurity" || name == "AccountingSecurity" {
             super::configuration::descriptor(value)?;
         }
     }
     let mut candidate = registry::read()?;
-    candidate.objects.clear();
     candidate.settings.extend(patch.clone());
-    super::configuration::prepare(&candidate)?;
+    if patch.keys().any(|name| name.starts_with("Accounting")) {
+        crate::accounting::prepare(&candidate).map_err(io::Error::other)?;
+    }
+    if patch.keys().any(|name| !name.starts_with("Accounting")) {
+        candidate.objects.clear();
+        super::configuration::prepare(&candidate)?;
+    }
     registry::write(&format!("{ROOT}\\Settings"), patch, false)
 }
 /// Validate edited fields and their references, while keeping unrelated broken
@@ -245,6 +277,13 @@ pub fn submit(
 }
 pub fn configuration_check(stored: &Stored) -> Vec<crate::model::Issue> {
     let mut issues = stored.validate();
+    if let Err(e) = crate::accounting::prepare(stored) {
+        issues.push(crate::model::Issue {
+            object: "Accounting".into(),
+            field: String::new(),
+            message: e,
+        });
+    }
     if issues.is_empty() {
         if let Err(e) = super::configuration::prepare(stored) {
             issues.push(crate::model::Issue {

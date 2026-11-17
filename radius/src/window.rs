@@ -14,11 +14,54 @@ use zeroize::Zeroizing;
 
 gxwi::icon!(b"dev.peios.radius");
 type Action = Box<dyn FnOnce() -> io::Result<Outcome> + Send>;
+fn usage_history_graph(history: &[serde_json::Value]) -> String {
+    let mut points: Vec<_> = history
+        .iter()
+        .filter(|v| v["effective_ms"].as_i64().is_some())
+        .collect();
+    points.sort_by_key(|v| v["effective_ms"].as_i64());
+    if points.len() < 2 {
+        return settings::row(
+            "Usage History",
+            "At least two retained reports are needed for a graph.",
+            "",
+        );
+    }
+    let start = points[0]["effective_ms"].as_i64().unwrap();
+    let end = points.last().unwrap()["effective_ms"].as_i64().unwrap();
+    let maximum = points
+        .iter()
+        .flat_map(|p| [p["input"].as_u64(), p["output"].as_u64()])
+        .flatten()
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let series = |key: &str| {
+        points
+            .iter()
+            .filter_map(|p| {
+                let value = p[key].as_u64()?;
+                let at = p["effective_ms"].as_i64()?;
+                Some(format!(
+                    "{:.2},{:.2}",
+                    10.0 + (at.saturating_sub(start) as f64)
+                        / (end.saturating_sub(start).max(1) as f64)
+                        * 580.0,
+                    150.0 - (value as f64) / (maximum as f64) * 140.0
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    format!("<figure><svg viewBox=\"0 0 600 160\" role=\"img\" aria-label=\"Cumulative received bytes (solid) and sent bytes (dashed) across retained reports\"><polyline fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" points=\"{}\"/><polyline fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-dasharray=\"6 4\" points=\"{}\"/></svg><figcaption>Cumulative bytes: received (solid), sent (dashed). Missing reports and counter resets can leave gaps. Scale: 0 to {maximum} bytes.</figcaption></figure>",series("input"),series("output"))
+}
 enum Outcome {
     Saved(Record),
     Done(String),
     Revealed(Zeroizing<String>),
     Inspected(String),
+    Accounting(serde_json::Value),
+    AccountingView(&'static str, serde_json::Value),
 }
 struct Pending {
     description: String,
@@ -29,6 +72,7 @@ struct Window {
     section: &'static str,
     stored: Result<Stored, String>,
     overview: serde_json::Value,
+    accounting: serde_json::Value,
     edit: Option<Record>,
     creating: bool,
     writable: bool,
@@ -39,12 +83,15 @@ struct Window {
     inspection: Option<String>,
     sd_editor: Option<gxwi_sd_editor::Editor>,
 }
-const SECTIONS: [(&str, &str, Glyph); 5] = [
+const SECTIONS: [(&str, &str, Glyph); 8] = [
     ("overview", "Overview", Glyph::Server),
     ("client", "Clients", Glyph::Globe),
     ("policy", "Access Policies", Glyph::Shield),
     ("profile", "Authentication Profiles", Glyph::Key),
     ("identity", "Server Identities", Glyph::Certificate),
+    ("accounting", "Accounting", Glyph::Server),
+    ("quota", "Allowances", Glyph::Shield),
+    ("accounting-profile", "Accounting Profiles", Glyph::Globe),
 ];
 fn section_tile(section: &str) -> Tile {
     match section {
@@ -62,6 +109,9 @@ fn section_about(section: &str) -> &'static str {
         "policy" => "Who may connect, and which authentication profile each network uses.",
         "profile" => "Reusable authentication methods and server identities.",
         "identity" => "Certificates this server presents when devices connect.",
+        "accounting"=>"Recorded sessions, usage and accounting health on this machine.",
+        "quota"=>"Independent limits for users and groups. Every applicable allowance must permit access.",
+        "accounting-profile"=>"Declarative mappings for accounting attributes reported by network devices.",
         _ => "RADIUS authentication and admission on this machine.",
     }
 }
@@ -97,6 +147,16 @@ fn fill(record: &Record, fields: &mut Fields) {
             name,
             &record.values.get(*name).map(field_text).unwrap_or_default(),
         );
+    }
+    for (name, default) in [
+        ("DisconnectPort", "3799"),
+        ("AccountingRequired", "0"),
+        ("ServiceKind", "wifi"),
+        ("OnAccountingUnavailable", "deny-new"),
+    ] {
+        if record.kind.optional(name) && !record.values.contains_key(name) {
+            fields.set(name, default);
+        }
     }
     if let Some(methods) = record.list("AuthenticationMethods") {
         fields.set("AuthenticationMethods", &methods.join(","));
@@ -140,6 +200,16 @@ fn label(field: &str) -> &str {
         "ServerIdentity" => "Server Identity",
         "CertificateFiles" => "Certificate Files",
         "PrivateKeyFile" => "Private Key File",
+        "Principal" => "Principal SID",
+        "Policy" => "Policy GUID (* for all)",
+        "Maximum" => "Maximum (bytes, milliseconds or sessions)",
+        "OnAccountingUnavailable" => "If Accounting Is Unavailable",
+        "AccountingRequired" => "Require Accounting (0 or 1)",
+        "DisconnectPort" => "Disconnect Port",
+        "AccountingProfile" => "Accounting Profile",
+        "AccountingSecurity" => "Accounting Permissions (blank to inherit)",
+        "ServiceKind" => "Service Kind",
+        "Definition" => "Profile Definition (JSON)",
         _ => field,
     }
 }
@@ -147,6 +217,7 @@ fn reference(field: &str) -> Option<Kind> {
     match field {
         "AuthenticationProfile" => Some(Kind::Profile),
         "ServerIdentity" => Some(Kind::Identity),
+        "AccountingProfile" => Some(Kind::AccountingProfile),
         _ => None,
     }
 }
@@ -222,6 +293,13 @@ impl Window {
                         }
                         Ok(Outcome::Inspected(info)) => {
                             w.inspection = Some(info);
+                        }
+                        Ok(Outcome::Accounting(snapshot)) => w.accounting = snapshot,
+                        Ok(Outcome::AccountingView(key, snapshot)) => {
+                            if !w.accounting.is_object() {
+                                w.accounting = serde_json::json!({});
+                            }
+                            w.accounting[key] = snapshot;
                         }
                         Err(error) => w.said = Some(Err(error)),
                     }
@@ -328,7 +406,7 @@ impl Window {
                     ],
                     may,
                 )
-            } else if *ty == Field::List {
+            } else if *field == "Definition" || *ty == Field::List {
                 list(field, label(field), may)
             } else {
                 text(field, label(field), "text", may)
@@ -587,6 +665,197 @@ impl Window {
         page.push_str(&settings_form);
         page
     }
+    fn accounting_page(&self) -> String {
+        let mut controls = settings::button(
+            "Refresh Sessions",
+            "accounting-refresh",
+            &[],
+            Button::Primary,
+            !self.busy,
+        );
+        controls.push_str(&settings::button(
+            "Health",
+            "accounting-health",
+            &[],
+            Button::Plain,
+            !self.busy,
+        ));
+        let mut page = settings::group(
+            "Sessions",
+            &settings::row(
+                "Recorded Sessions",
+                "Reports can arrive late or out of order; inferred states are labelled.",
+                &controls,
+            ),
+            "",
+        );
+        if let Some(error) = self.accounting.get("error").and_then(|v| v.as_str()) {
+            page.push_str(&settings::banner(error));
+        }
+        if let Some(rows) = self.accounting["sessions"].as_array() {
+            let mut body = String::new();
+            for row in rows {
+                let id = row["id"].as_str().unwrap_or("");
+                let name = row["name"]
+                    .as_str()
+                    .or_else(|| row["sid"].as_str())
+                    .unwrap_or("Unresolved or protected identity");
+                let mut actions = settings::button(
+                    "Details",
+                    "accounting-session",
+                    &[("id", id)],
+                    Button::Plain,
+                    !self.busy,
+                );
+                actions.push_str(&settings::button(
+                    "Disconnect…",
+                    "accounting-disconnect",
+                    &[("id", id)],
+                    Button::Danger,
+                    !self.busy,
+                ));
+                body.push_str(&settings::row(
+                    name,
+                    &format!("{} · {}", id, row["state"].as_str().unwrap_or("unknown")),
+                    &actions,
+                ));
+            }
+            page.push_str(&settings::group("Session History", &body, ""));
+            if let (Some(after), Some(revision)) = (
+                self.accounting["next"].as_str(),
+                self.accounting["revision"].as_u64(),
+            ) {
+                page.push_str(&settings::button(
+                    "Next Page",
+                    "accounting-next",
+                    &[("after", after), ("revision", &revision.to_string())],
+                    Button::Plain,
+                    !self.busy,
+                ));
+            }
+        }
+        if let Some(health) = self.accounting.get("health") {
+            let ledger = &health["ledger"];
+            let mut body = settings::row(
+                "Ledger",
+                if ledger["available"] == true {
+                    "Available"
+                } else {
+                    "Unavailable"
+                },
+                "",
+            );
+            for (key, label) in [
+                ("committed", "Committed Reports"),
+                ("duplicate", "Duplicate Reports"),
+                ("failed", "Failed Reports"),
+                ("admission_bypasses", "Admission Bypasses"),
+                ("last_commit_latency_ms", "Last Commit (milliseconds)"),
+            ] {
+                body.push_str(&settings::row(label, "", &escape(&ledger[key].to_string())));
+            }
+            if let Some(error) = health["configuration_error"]
+                .as_str()
+                .or_else(|| ledger["last_error"].as_str())
+            {
+                body.push_str(&settings::banner(error));
+            }
+            page.push_str(&settings::group("Accounting Health", &body, ""));
+        }
+        if let Some(detail) = self.accounting.get("detail") {
+            let row = &detail["session"];
+            let mut body = String::new();
+            for (key, label) in [
+                ("id", "Session"),
+                ("name", "Account"),
+                ("sid", "Verified Principal"),
+                ("state", "State"),
+                ("kind", "Service Report"),
+                ("input", "Received Bytes"),
+                ("output", "Sent Bytes"),
+            ] {
+                if !row[key].is_null() {
+                    body.push_str(&settings::row(
+                        label,
+                        "",
+                        &escape(
+                            &row[key]
+                                .as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| row[key].to_string()),
+                        ),
+                    ));
+                }
+            }
+            if let Some(warnings) = row["warnings"].as_array() {
+                for warning in warnings.iter().filter_map(|v| v.as_str()) {
+                    body.push_str(&settings::banner(warning));
+                }
+            }
+            if let Some(history) = detail["history"].as_array() {
+                body.push_str(&usage_history_graph(history));
+            }
+            page.push_str(&settings::group("Session Details", &body, ""));
+        }
+        if let Some(balances) = self.accounting.get("usage").and_then(|v| v.as_array()) {
+            let mut body = String::new();
+            for b in balances {
+                let used = b["used"].as_u64().unwrap_or(0);
+                let max = b["budget"]["maximum"].as_u64().unwrap_or(0);
+                let percent = if max == 0 {
+                    100
+                } else {
+                    ((used as u128) * 100 / (max as u128)).min(100) as u64
+                };
+                let label = b["budget"]["dimension"].as_str().unwrap_or("Usage");
+                let unit = if label.ends_with("time") {
+                    "milliseconds"
+                } else if label == "concurrent" {
+                    "sessions"
+                } else {
+                    "bytes"
+                };
+                let description = format!(
+                    "{used} of {max} {unit} · {}{}",
+                    b["budget"]["period"].as_str().unwrap_or(""),
+                    if b["uncertain"] == true {
+                        " · uncertain evidence"
+                    } else {
+                        ""
+                    }
+                );
+                body.push_str(&settings::row(label,&description,&format!("<progress max=\"100\" value=\"{percent}\" aria-label=\"{}\">{percent}%</progress>",escape(label))));
+            }
+            page.push_str(&settings::group(
+                "Principal Allowances",
+                &body,
+                "Every applicable allowance is consumed independently.",
+            ));
+        }
+        page.push_str(&format!(
+            r#"<form fx-submit="accounting-usage">{}{}</form>"#,
+            settings::group(
+                "Usage",
+                &format!(
+                    "{}{}",
+                    settings::row(
+                        "Principal SID",
+                        "Usage belongs to a user or group principal.",
+                        &text("usage-principal", "Principal SID", "text", !self.busy)
+                    ),
+                    settings::row(
+                        "Policy GUID",
+                        "Use * for allowances shared across policies.",
+                        &text("usage-policy", "Policy GUID", "text", !self.busy)
+                    )
+                ),
+                ""
+            ),
+            settings::submit("Show Usage", Button::Plain, !self.busy)
+        ));
+        page.push_str(&format!(r#"<form fx-submit="accounting-settings">{}{}</form>"#,settings::group("Accounting Settings",&format!("{}{}{}",settings::row("Enabled","The private ledger directory and UDP port permission must be provisioned before activation.",&settings::select("accounting-enabled","Enabled",&[("0".into(),"Disabled".into()),("1".into(),"Enabled".into())],!self.busy)),settings::row("Listen Addresses","Comma-separated UDP socket addresses.",&text("accounting-listen","Listen Addresses","text",!self.busy)),settings::row("Advanced Setting","Registry setting name and value; the CLI uses the same validator.",&format!("{}{}",text("accounting-setting","Setting Name","text",!self.busy),text("accounting-value","Setting Value","text",!self.busy)))),""),settings::submit("Save Settings",Button::Primary,!self.busy)));
+        page
+    }
     fn permissions(&mut self, connect: bool) {
         let Some(record) = self.edit.clone() else {
             return;
@@ -758,6 +1027,8 @@ impl Live for Window {
         }
         if self.section == "overview" {
             page.push_str(&self.overview_page());
+        } else if self.section == "accounting" {
+            page.push_str(&self.accounting_page());
         } else if let Some(record) = &self.edit {
             page.push_str(&self.form(record));
         } else if let Some(kind) = Kind::parse(self.section) {
@@ -819,6 +1090,21 @@ impl Live for Window {
             return;
         }
         match name {
+            "accounting-refresh"=>self.launch(Box::new(||Ok(Outcome::Accounting(radius_management::native::accounting::query(radius_management::accounting::Request::Sessions{filter:crate::cli::radius_accounting_filter(None)})?)))),
+            "accounting-next"=>{if let (Some(after),Some(revision))=(value.get("after").and_then(|v|v.as_str()),value.get("revision").and_then(|v|v.as_str()).and_then(|v|v.parse().ok())) {
+                let mut filter=crate::cli::radius_accounting_filter(None);filter.after=Some(after.into());filter.revision=Some(revision);
+                self.launch(Box::new(move||Ok(Outcome::Accounting(radius_management::native::accounting::query(radius_management::accounting::Request::Sessions{filter})?))));
+            }},
+            "accounting-health"=>self.launch(Box::new(||Ok(Outcome::AccountingView("health",radius_management::native::accounting::query(radius_management::accounting::Request::Status)?)))),
+            "accounting-session"=>{if let Some(id)=value.get("id").and_then(|v|v.as_str()){let id=id.to_owned();self.launch(Box::new(move||{
+                use radius_management::{accounting::Request as R,native::accounting::query};
+                let session=query(R::Session{id:id.clone()})?;
+                let history=query(R::History{id,limit:200}).ok();
+                Ok(Outcome::AccountingView("detail",serde_json::json!({"session":session,"history":history})))
+            }));}},
+            "accounting-disconnect"=>{if let Some(id)=value.get("id").and_then(|v|v.as_str()){let id=id.to_owned();self.request("Ask the network device to disconnect this session? Acknowledgement does not confirm the session has ended.".into(),Box::new(move||{radius_management::native::accounting::query(radius_management::accounting::Request::Disconnect{id})?;Ok(Outcome::Done("Disconnect queued. Refresh accounting to observe the result.".into()))}));}},
+            "accounting-usage"=>{let principal=fields.get("usage-principal").to_owned();let policy=fields.get("usage-policy").to_owned();self.launch(Box::new(move||Ok(Outcome::AccountingView("usage",radius_management::native::accounting::query(radius_management::accounting::Request::Usage{principal,policy})?))));},
+            "accounting-settings"=>{let mut patch=Values::new();for (field,name) in [("accounting-enabled","AccountingEnabled"),("accounting-listen","AccountingListen")]{match operations::parse_setting(name,fields.get(field)){Ok(v)=>{patch.insert(name.into(),v);},Err(e)=>{self.said=Some(Err(e.to_string()));return;}}}let name=fields.get("accounting-setting");if !name.is_empty(){if !name.starts_with("Accounting"){self.said=Some(Err("Choose an accounting setting.".into()));return;}match operations::parse_setting(name,fields.get("accounting-value")){Ok(v)=>{patch.insert(name.into(),v);},Err(e)=>{self.said=Some(Err(e.to_string()));return;}}}self.launch(Box::new(move||{operations::save_settings(&patch)?;Ok(Outcome::Done("Accounting settings saved; activation is checked separately.".into()))}));},
             "initialize"=>self.request("Create the initial RADIUS configuration? Existing configuration will not be overwritten.".into(),Box::new(||{operations::initialize()?;Ok(Outcome::Done("Configuration initialized.".into()))})),
             "section" => {
                 if let Some(section) = value
@@ -832,6 +1118,12 @@ impl Live for Window {
                     self.secret = None;
                     self.inspection = None;
                     fields.set("shared-secret", "");
+                    if section.0=="accounting"{
+                        fields.set("usage-policy","*");
+                        let settings=self.stored.as_ref().ok().map(|s|&s.settings);
+                        fields.set("accounting-enabled",if settings.and_then(|v|v.get("AccountingEnabled"))==Some(&Value::Number(1)){"1"}else{"0"});
+                        fields.set("accounting-listen",&settings.and_then(|v|v.get("AccountingListen")).map(|v|field_text(v).replace('\n',",")).unwrap_or_else(||"0.0.0.0:1813".into()));
+                    }
                 }
             }
             "create" => {
@@ -942,6 +1234,7 @@ impl Live for Window {
                         continue;
                     }
                     let text = fields.get(field);
+                    if text.is_empty()&&record.kind.optional(field)&&*ty==Field::Number{continue;}
                     if record.kind == Kind::Identity && !creating && text.is_empty() {
                         continue;
                     }
@@ -1062,6 +1355,7 @@ pub fn open() -> i32 {
             section: "overview",
             stored: read(),
             overview: overview(),
+            accounting: serde_json::Value::Null,
             edit: None,
             creating: false,
             writable: false,
@@ -1110,6 +1404,7 @@ mod tests {
             section: "overview",
             stored: Ok(Stored::default()),
             overview: serde_json::json!({"daemon":"invalid","service":{"state":"Active"},"start_at_boot":true,"runtime":{"issues":[{"object":"policy-guid","field":"References","message":"missing profile-guid"}]}}),
+            accounting: serde_json::Value::Null,
             edit: None,
             creating: false,
             writable: true,
@@ -1251,6 +1546,25 @@ mod tests {
         });
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+    #[test]
+    fn accounting_views_escape_identity_and_keep_unsigned_usage_exact() {
+        let mut w = window();
+        w.section = "accounting";
+        w.accounting = serde_json::json!({
+            "sessions":[{"id":"fixture","name":"<script>identity</script>","state":"stale"}],
+            "usage":[{"used":u64::MAX,"budget":{"maximum":u64::MAX,"dimension":"total-bytes","period":"lifetime"},"uncertain":true}],
+            "detail":{"session":{"id":"fixture","state":"stale"},"history":[{"effective_ms":1000,"input":0,"output":0},{"effective_ms":2000,"input":u64::MAX,"output":10}]}
+        });
+        let html = w.accounting_page();
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains("18446744073709551615"));
+        assert!(
+            html.contains("uncertain evidence")
+                && html.contains("<progress")
+                && html.contains("<svg")
+        );
     }
     #[test]
     fn ordinary_client_pages_do_not_reveal_secret_values() {

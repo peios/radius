@@ -5,7 +5,7 @@ use peios::{
 use radiusd::{
     driver::Driver,
     native::{
-        authentication::Auth,
+        accounting::AccountingAuth,
         configuration::{watch, Update},
         events::Sink,
     },
@@ -53,7 +53,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let updates = watch();
     let mut sink = Sink::new(Vec::new(), actor)?;
-    let mut driver: Option<Driver<Auth>> = None;
+    let accounting = radius_management::native::accounting::Service::start()?;
+    let mut driver: Option<Driver<AccountingAuth>> = None;
     let status = Arc::new(Mutex::new(radius_management::status::Status::default()));
     radius_management::native::control::serve(status.clone())?;
     // Readiness means the local status service is ready. Invalid configuration
@@ -62,6 +63,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut announced = None;
     let mut bytes = [0u8; 65536];
     loop {
+        let accounting_snapshot = accounting.snapshot();
+        let mut accounting_status = accounting.ledger.snapshot();
+        accounting_status.available &= accounting_snapshot.as_ref().is_some_and(|s| s.ledger_ready);
+        sink.accounting(
+            accounting_snapshot.is_none_or(|s| s.config.settings.enabled),
+            &accounting_status,
+        );
         for _ in 0..4 {
             match updates.try_recv() {
                 Ok(Update::Pending) => {
@@ -91,8 +99,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(d) = driver.as_mut() {
                             d.activate(config.clone()).map_err(io::Error::other)?;
                         } else {
-                            driver =
-                                Some(Driver::new(config.clone(), Auth).map_err(io::Error::other)?);
+                            driver = Some(
+                                Driver::new(
+                                    config.clone(),
+                                    AccountingAuth::new(accounting.clone()),
+                                )
+                                .map_err(io::Error::other)?,
+                            );
                         }
                         Ok(sockets)
                     });

@@ -7,7 +7,17 @@ usage: radius [--json] [command]
   status                         service, saved and effective configuration
   config show | check | init      inspect, validate, or initialize configuration
   config set NAME=VALUE ...       change global settings
-  client|policy|profile|identity list
+  accounting init                provision the private accounting ledger directory
+  accounting telemetry-init      provision the service metric namespace, preserving policy
+  accounting status | sessions [POLICY-GUID]
+    sessions options: --after GUID --revision N --limit N --principal SID --active
+  accounting session|history|disconnect SESSION-GUID
+  accounting related|commands SESSION-GUID
+  accounting usage SID [POLICY-GUID]
+  accounting annotate SESSION-GUID NOTE
+  accounting correct-end SESSION-GUID UNIX-MILLISECONDS NOTE --confirm
+  accounting rebuild --confirm   rebuild retained evidence without sending actions
+  client|policy|profile|identity|quota|accounting-profile list
   KIND show NAME-OR-GUID
   KIND create NAME [--set FIELD=VALUE] ...
   KIND set NAME-OR-GUID [--set FIELD=VALUE] ...
@@ -28,6 +38,16 @@ restart interrupts authentication; established access may last until reauthentic
 ";
 fn usage(s: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, s.into())
+}
+#[cfg(feature = "native")]
+pub(crate) fn radius_accounting_filter(
+    policy: Option<String>,
+) -> radius_management::accounting::Filter {
+    radius_management::accounting::Filter {
+        policy,
+        limit: 100,
+        ..Default::default()
+    }
 }
 #[derive(Debug)]
 pub struct CheckIssues(pub Vec<radius_management::model::Issue>);
@@ -78,6 +98,87 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
     use serde_json::json;
     let words: Vec<_> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["accounting", "init"] => {
+            radius_management::native::accounting::provision_directory()?;
+            Ok(json!({"provisioned":true}))
+        }
+        ["accounting", "telemetry-init"] => {
+            radius_management::native::accounting::provision_metrics()?;
+            Ok(json!({"provisioned":true}))
+        }
+        ["accounting", rest @ ..] => {
+            use radius_management::accounting::Request as R;
+            let request = match *rest {
+                ["status"] => R::Status,
+                ["sessions", ref options @ ..] => {
+                    let mut filter = radius_accounting_filter(None);
+                    let mut i = 0;
+                    while i < options.len() {
+                        match options[i] {
+                            "--active" => filter.active_only = true,
+                            flag @ ("--after" | "--revision" | "--limit" | "--principal") => {
+                                i += 1;
+                                let value = options
+                                    .get(i)
+                                    .ok_or_else(|| usage("missing sessions option value"))?;
+                                match flag {
+                                    "--after" => filter.after = Some((*value).into()),
+                                    "--principal" => filter.principal = Some((*value).into()),
+                                    "--revision" => {
+                                        filter.revision = Some(
+                                            value.parse().map_err(|_| usage("invalid revision"))?,
+                                        )
+                                    }
+                                    _ => {
+                                        filter.limit =
+                                            value.parse().map_err(|_| usage("invalid limit"))?
+                                    }
+                                }
+                            }
+                            policy if !policy.starts_with('-') && filter.policy.is_none() => {
+                                filter.policy = Some(policy.into())
+                            }
+                            _ => return Err(usage("invalid sessions option")),
+                        }
+                        i += 1;
+                    }
+                    if filter.after.is_some() && filter.revision.is_none() {
+                        return Err(usage("--after requires --revision from the previous page"));
+                    }
+                    R::Sessions { filter }
+                }
+                ["session", id] => R::Session { id: id.into() },
+                ["history", id] => R::History {
+                    id: id.into(),
+                    limit: 100,
+                },
+                ["usage", principal] => R::Usage {
+                    principal: principal.into(),
+                    policy: "*".into(),
+                },
+                ["related", id] => R::Related { id: id.into() },
+                ["commands", id] => R::Commands { id: id.into() },
+                ["correct-end", id, end, note, "--confirm"] => R::CorrectEnd {
+                    id: id.into(),
+                    end_ms: end
+                        .parse()
+                        .map_err(|_| usage("end time requires Unix milliseconds"))?,
+                    note: note.into(),
+                },
+                ["usage", principal, policy] => R::Usage {
+                    principal: principal.into(),
+                    policy: policy.into(),
+                },
+                ["disconnect", id] => R::Disconnect { id: id.into() },
+                ["annotate", id, note] => R::Annotate {
+                    id: id.into(),
+                    note: note.into(),
+                },
+                ["rebuild", "--confirm"] => R::Rebuild,
+                _ => return Err(usage("invalid accounting command; run radius --help")),
+            };
+            radius_management::native::accounting::query(request)
+        }
         [] | ["status"] => {
             let saved = registry::read();
             let live = control::query();

@@ -2,8 +2,8 @@
 
 `radius` is the Peios RADIUS repository. It contains the portable `radius-core`
 library, the native Peios `radiusd` daemon, the shared `radius-management`
-library, the CLI/GXWI `radius` program, and a separate loopback-only
-`radius-test-server` qualification fixture.
+library, the `radius-accounting` ledger, the CLI/GXWI `radius` program, and a
+separate loopback-only `radius-test-server` qualification fixture.
 
 The native adapter uses authd Authenticate without a local logon, reads normal
 Registry configuration, checks the network's current Connect SD through
@@ -67,12 +67,13 @@ pekit build -j 2 radiusd
 The raw executable paths are reported by `pekit build`. Pass the harness to the
 interoperability runner. No target builds an image, kernel or `pkgs/` package.
 
-The `radius` raw target includes the window. Portable Pekit `unit` and
-`management` targets are qualified. Native Pekit builds currently encounter
-older SDK/authd pins inside dependency libraries' own build graphs; those
-pins need aligning separately. The Cargo native builds above are qualified
-with matching raw libraries. Do not bypass a Pekit pin mismatch or select
-arbitrary library outputs.
+The `radius` raw target includes the window. The `accounting` test target
+covers the ledger crate. Accounting qualification uses Cargo; the Pekit path
+through bundled SQLite needs separate qualification. Native Pekit builds
+encounter older SDK/authd pins inside dependency libraries' own build graphs;
+those pins need aligning separately. The Cargo native builds above are
+qualified with matching raw libraries. Do not bypass a Pekit pin mismatch or
+select arbitrary library outputs.
 
 ## Administration
 
@@ -114,9 +115,34 @@ The disposable native `tests/native/mschapv2.sh` gate covers PEAP and TTLS
 coexistence, source verification, password changes, and the NT storage and
 backfill controls. PEAP uses TLS 1.2; TTLS supports TLS 1.2 and 1.3. A
 profile-free iPhone join through PEAP has succeeded in the UniFi development
-trial. Roaming and AP reauthentication enforcement remain to be qualified.
+trial. The UniFi/iPhone trial also passed timed reauthentication and accounting
+across AP changes. These checks do not establish radio handoff latency or
+uninterrupted application traffic.
 
-Accounting, proxying, further EAP methods, resumption, and application SSO are
-outside this slice. Network authorization uses the kernel supplied-subject API,
+Proxying, further EAP methods, resumption, and application SSO are outside this
+slice. Network authorization uses the kernel supplied-subject API,
 and configuration uses a public read-only Registry snapshot. Referenced
 credential files are loaded after that snapshot is released.
+
+## Accounting
+
+`radius-accounting` owns the durable ledger, report interpretation, principal
+allowances, retention, and durable Disconnect records. The native adapter
+authenticates accounting peers and exposes a local token-checked query API.
+Successful accounting replies follow a WAL/FULL commit; the authentication
+coordinator persists Class correlation and admission reservations before an
+Access-Accept. Accounting does not create a logon token or expose credentials.
+
+See [Accounting](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/6--accounting.md)
+for storage, privacy, quota semantics, configuration, and qualification limits.
+`tests/accounting-fixtures.py` supplies independently calculated integrity
+vectors. `tests/native/accounting.sh` provisions a fresh disposable guest;
+never run it on an existing deployed machine.
+
+The real UniFi/iPhone accounting trial passed Start, one-minute Interim updates,
+Class-based identity correlation, Stop, separate reconnect occurrences, verified
+Disconnect with automatic reconnection, principal time-allowance exhaustion and
+restoration, and daemon restart with retained history and continuing AP updates.
+Stored reports also preserve accounting identity across three APs. Full eventd
+ingestion, production-scale capacity, and host power-loss behavior remain
+qualification limits; they are not established by these tests.

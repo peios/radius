@@ -3,7 +3,7 @@ use md5::Md5;
 use radius_core::{Limits, Reply, Verification};
 use radiusd::{
     config::{Client, Config, Network, Prefix},
-    driver::{Backend, Driver, Event, Output, Progress, Reason},
+    driver::{AdmissionContext, AdmissionExtras, Backend, Driver, Event, Output, Progress, Reason},
 };
 use rustls::{
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
@@ -20,11 +20,13 @@ use std::{
 };
 use zeroize::Zeroizing;
 const SECRET: &[u8] = b"fixture-radius-secret-32-bytes!!!";
+type AccountingState = (Rc<Cell<bool>>, Rc<Cell<usize>>, Option<Reason>);
 
 struct Fake {
     calls: Rc<Cell<usize>>,
     ready: Rc<Cell<bool>>,
     drops: Rc<Cell<usize>>,
+    accounting: Option<AccountingState>,
 }
 struct Work {
     ready: Rc<Cell<bool>>,
@@ -66,6 +68,28 @@ impl Backend for Fake {
     }
     fn identity<'a>(&self, _: &'a ()) -> (&'a str, &'a [u8]) {
         ("canonical-jack", b"test-sid")
+    }
+    fn accounting(
+        &mut self,
+        _: &(),
+        context: AdmissionContext<'_>,
+    ) -> Result<Option<AdmissionExtras>, Reason> {
+        let Some((ready, calls, denied)) = &self.accounting else {
+            return Ok(Some(AdmissionExtras::default()));
+        };
+        assert_eq!(context.client_id, "aps");
+        assert_eq!(context.network_id, "home");
+        calls.set(calls.get() + 1);
+        if !ready.get() {
+            return Ok(None);
+        }
+        if let Some(reason) = denied {
+            return Err(*reason);
+        }
+        Ok(Some(AdmissionExtras {
+            class: Some(b"durably-committed-reference".to_vec()),
+            timeout_seconds: Some(123),
+        }))
     }
 }
 #[derive(Default)]
@@ -159,6 +183,7 @@ fn setup_peers() -> (Setup, ClientConnection) {
         calls: calls.clone(),
         ready: ready.clone(),
         drops: drops.clone(),
+        accounting: None,
     };
     ((config, tls_client, backend, calls, ready, drops), second)
 }
@@ -285,6 +310,75 @@ fn pending_outer(
     panic!("TTLS exchange did not reach backend");
 }
 
+#[test]
+fn accounting_completion_gates_accept_and_cached_class_is_exact() {
+    let (config, tls, mut backend, _, _, _) = setup();
+    let committed = Rc::new(Cell::new(false));
+    let calls = Rc::new(Cell::new(0));
+    backend.accounting = Some((committed.clone(), calls.clone(), None));
+    let mut d = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out {
+        deliver: true,
+        ..Default::default()
+    };
+    let now = Instant::now();
+    let last = pending(&mut d, tls, &mut out, now);
+    d.tick(now, &mut out);
+    assert!(out.replies.is_empty() && out.events.is_empty());
+    committed.set(true);
+    d.tick(now, &mut out);
+    let reply = out.replies.pop_front().unwrap();
+    assert_eq!(reply[0], 2);
+    let mut pos = 20;
+    let mut class = None;
+    let mut timeout = None;
+    while pos < reply.len() {
+        let n = reply[pos + 1] as usize;
+        if reply[pos] == 25 {
+            class = Some(reply[pos + 2..pos + n].to_vec());
+        }
+        if reply[pos] == 27 {
+            timeout = Some(u32::from_be_bytes(
+                reply[pos + 2..pos + n].try_into().unwrap(),
+            ));
+        }
+        pos += n;
+    }
+    assert_eq!(
+        class.as_deref(),
+        Some(b"durably-committed-reference".as_slice())
+    );
+    assert_eq!(timeout, Some(123));
+    let before = calls.get();
+    d.receive(now, 0, peer(), &last, &mut out);
+    assert_eq!(out.replies.pop_front().unwrap(), reply);
+    assert_eq!(calls.get(), before);
+}
+#[test]
+fn exhausted_accounting_allowance_cannot_emit_accept_or_class() {
+    let (config, tls, mut backend, _, _, _) = setup();
+    backend.accounting = Some((
+        Rc::new(Cell::new(true)),
+        Rc::new(Cell::new(0)),
+        Some(Reason::Quota),
+    ));
+    let mut d = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out {
+        deliver: true,
+        ..Default::default()
+    };
+    let now = Instant::now();
+    pending(&mut d, tls, &mut out, now);
+    d.tick(now, &mut out);
+    let reply = out.replies.pop_front().unwrap();
+    assert_eq!(reply[0], 3);
+    let mut pos = 20;
+    while pos < reply.len() {
+        assert_ne!(reply[pos], 25);
+        pos += reply[pos + 1] as usize;
+    }
+    assert_eq!(out.events[0].0, Reason::Quota);
+}
 #[test]
 fn completed_exchange_replays_identically_without_verifying_or_logging_twice() {
     let (config, tls, backend, calls, _, _) = setup();

@@ -68,6 +68,63 @@ fn setup() -> Stored {
         ],
     }
 }
+
+#[test]
+fn accounting_validation_is_independent_of_tls_material_and_strict_about_types() {
+    use radius_management::accounting::prepare;
+    let mut stored = setup();
+    assert!(prepare(&stored).is_ok()); // no certificate-file reads
+    stored.objects[0]
+        .values
+        .insert("DisconnectPort".into(), text("3799"));
+    assert!(prepare(&stored).is_err());
+    stored.objects[0].values.remove("DisconnectPort");
+    stored.settings.insert(
+        "AccountingListen".into(),
+        list(&["0.0.0.0:1813", "127.0.0.1:1813"]),
+    );
+    assert!(prepare(&stored).is_err());
+    stored.settings.insert(
+        "AccountingListen".into(),
+        list(&["0.0.0.0:1813", "[::]:1813"]),
+    );
+    assert!(prepare(&stored).is_ok());
+    stored
+        .settings
+        .insert("AccountingRawCapture".into(), Value::Number(1));
+    stored
+        .settings
+        .insert("AccountingRetainNames".into(), Value::Number(0));
+    assert!(prepare(&stored).is_err());
+}
+
+#[test]
+fn accounting_profiles_and_quotas_have_bounded_explicit_semantics() {
+    use radius_management::accounting::prepare;
+    let mut stored = setup();
+    stored.objects.push(record(
+        Kind::Quota,
+        "55555555-5555-4555-8555-555555555555",
+        &[
+            ("Principal", text("S-1-5-21-1-2-3-1001")),
+            ("Policy", text(POLICY)),
+            ("Dimension", text("connected-time")),
+            ("Period", text("day")),
+            ("Maximum", text("18000000")),
+            ("Disconnect", Value::Number(1)),
+        ],
+    ));
+    let config = prepare(&stored).unwrap();
+    assert_eq!(config.budgets.len(), 1);
+    assert_eq!(config.budgets[0].maximum, 18000000);
+    stored
+        .objects
+        .last_mut()
+        .unwrap()
+        .values
+        .insert("Dimension".into(), text("concurrent"));
+    assert!(prepare(&stored).is_err()); // a concurrent slot has no reset calendar
+}
 #[test]
 fn display_renames_preserve_references_and_authentication_identity() {
     let mut stored = setup();

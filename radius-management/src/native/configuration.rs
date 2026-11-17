@@ -106,7 +106,11 @@ pub fn prepare(stored: &Stored) -> io::Result<Config> {
         identities.insert(r.id.clone(), (tls, tag));
     }
     let mut networks = BTreeMap::new();
-    for r in stored.objects.iter().filter(|r| r.kind == Kind::Policy) {
+    for r in stored
+        .objects
+        .iter()
+        .filter(|r| r.kind == Kind::Policy && r.text("ServiceKind") != Some("accounting-only"))
+    {
         let profile = stored
             .get(Kind::Profile, r.text("AuthenticationProfile").unwrap())
             .unwrap();
@@ -155,7 +159,13 @@ pub fn prepare(stored: &Stored) -> io::Result<Config> {
                     .iter()
                     .map(|s| Prefix::parse(s).map_err(invalid))
                     .collect::<io::Result<_>>()?,
-                networks: r.list("Policies").unwrap().to_vec(),
+                networks: r
+                    .list("Policies")
+                    .unwrap()
+                    .iter()
+                    .filter(|id| networks.contains_key(*id))
+                    .cloned()
+                    .collect(),
             },
         );
     }
@@ -196,6 +206,7 @@ pub fn watch() -> Receiver<Update> {
 fn worker(tx: SyncSender<Update>) {
     let mut watch: Option<Key> = None;
     let mut fingerprint = None;
+    let mut saved_fingerprint = None;
     let mut last_check = Instant::now() - Duration::from_secs(3);
     let mut buffer = [0; 8192];
     loop {
@@ -229,11 +240,15 @@ fn worker(tx: SyncSender<Update>) {
                 .and_then(prepare);
             match next {
                 Ok(config) if watch.is_some() => {
-                    if changed || fingerprint != Some(config.fingerprint) {
+                    if changed
+                        || fingerprint != Some(config.fingerprint)
+                        || saved_fingerprint.as_ref() != Some(&config.saved_fingerprint)
+                    {
                         if !changed && tx.send(Update::Pending).is_err() {
                             return;
                         }
                         fingerprint = Some(config.fingerprint);
+                        saved_fingerprint = Some(config.saved_fingerprint.clone());
                         if tx.send(Update::Valid(Arc::new(config))).is_err() {
                             return;
                         }

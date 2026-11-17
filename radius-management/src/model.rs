@@ -18,15 +18,26 @@ pub enum Kind {
     Policy,
     Profile,
     Identity,
+    Quota,
+    AccountingProfile,
 }
 impl Kind {
-    pub const ALL: [Self; 4] = [Self::Client, Self::Policy, Self::Profile, Self::Identity];
+    pub const ALL: [Self; 6] = [
+        Self::Client,
+        Self::Policy,
+        Self::Profile,
+        Self::Identity,
+        Self::Quota,
+        Self::AccountingProfile,
+    ];
     pub fn collection(self) -> &'static str {
         match self {
             Self::Client => "Clients",
             Self::Policy => "AccessPolicies",
             Self::Profile => "AuthenticationProfiles",
             Self::Identity => "ServerIdentities",
+            Self::Quota => "Quotas",
+            Self::AccountingProfile => "AccountingProfiles",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -35,6 +46,8 @@ impl Kind {
             "policy" => Some(Self::Policy),
             "profile" => Some(Self::Profile),
             "identity" => Some(Self::Identity),
+            "quota" => Some(Self::Quota),
+            "accounting-profile" => Some(Self::AccountingProfile),
             _ => None,
         }
     }
@@ -45,27 +58,60 @@ impl Kind {
                 ("Addresses", List),
                 ("SecretFile", Text),
                 ("Policies", List),
+                ("AccountingProfile", Text),
+                ("DisconnectPort", Number),
             ],
             Self::Policy => &[
                 ("SSID", Text),
                 ("ConnectSecurity", Descriptor),
                 ("AuthenticationProfile", Text),
                 ("ReauthenticateSeconds", Number),
+                ("ServiceKind", Text),
+                ("AccountingRequired", Number),
+                ("OnAccountingUnavailable", Text),
+                ("AccountingSecurity", Descriptor),
             ],
             Self::Profile => &[("AuthenticationMethods", List), ("ServerIdentity", Text)],
             Self::Identity => &[("CertificateFiles", List), ("PrivateKeyFile", Text)],
+            Self::Quota => &[
+                ("Principal", Text),
+                ("Policy", Text),
+                ("Dimension", Text),
+                ("Period", Text),
+                ("Maximum", Text),
+                ("Disconnect", Number),
+            ],
+            Self::AccountingProfile => &[("Definition", Text)],
         }
     }
     pub fn field(self, name: &str) -> Option<Field> {
         match name {
             "Name" => Some(Field::Text),
             "Enabled" if self != Self::Identity => Some(Field::Number),
+            "AccountingRequired" if self == Self::Policy => Some(Field::Number),
+            "OnAccountingUnavailable" | "ServiceKind" if self == Self::Policy => Some(Field::Text),
+            "AccountingSecurity" if self == Self::Policy => Some(Field::Descriptor),
+            "AccountingProfile" if self == Self::Client => Some(Field::Text),
+            "DisconnectPort" if self == Self::Client => Some(Field::Number),
             _ => self
                 .fields()
                 .iter()
                 .find(|(n, _)| *n == name)
                 .map(|(_, t)| *t),
         }
+    }
+    pub fn optional(self, name: &str) -> bool {
+        matches!(
+            (self, name),
+            (Self::Client, "AccountingProfile" | "DisconnectPort")
+                | (
+                    Self::Policy,
+                    "ServiceKind"
+                        | "AccountingRequired"
+                        | "OnAccountingUnavailable"
+                        | "AccountingSecurity"
+                )
+        )
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +155,13 @@ impl Record {
                 .values
                 .insert("ReauthenticateSeconds".into(), Value::Number(3600));
         }
+        if kind == Kind::Quota {
+            record.values.extend([
+                ("Policy".into(), Value::Text("*".into())),
+                ("Period".into(), Value::Text("lifetime".into())),
+                ("Disconnect".into(), Value::Number(1)),
+            ]);
+        }
         Ok(record)
     }
     pub fn path(&self) -> String {
@@ -140,12 +193,19 @@ impl Record {
     }
     pub fn references(&self) -> Vec<(Kind, &str)> {
         match self.kind {
-            Kind::Client => self
-                .list("Policies")
-                .unwrap_or_default()
-                .iter()
-                .map(|id| (Kind::Policy, id.as_str()))
-                .collect(),
+            Kind::Client => {
+                let mut references: Vec<_> = self
+                    .list("Policies")
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|id| (Kind::Policy, id.as_str()))
+                    .collect();
+                if let Some(id) = self.text("AccountingProfile").filter(|id| !id.is_empty()) {
+                    references.push((Kind::AccountingProfile, id));
+                }
+                references
+            }
+            Kind::Policy if self.text("ServiceKind") == Some("accounting-only") => Vec::new(),
             Kind::Policy => self
                 .text("AuthenticationProfile")
                 .map(|id| vec![(Kind::Profile, id)])
@@ -154,7 +214,12 @@ impl Record {
                 .text("ServerIdentity")
                 .map(|id| vec![(Kind::Identity, id)])
                 .unwrap_or_default(),
-            Kind::Identity => Vec::new(),
+            Kind::Identity | Kind::AccountingProfile => Vec::new(),
+            Kind::Quota => self
+                .text("Policy")
+                .filter(|id| *id != "*")
+                .map(|id| vec![(Kind::Policy, id)])
+                .unwrap_or_default(),
         }
     }
 }
@@ -247,6 +312,25 @@ impl Stored {
                 issue(&r.id, "Enabled", "expected 0 or 1");
             }
             for (field, ty) in r.kind.fields() {
+                if r.kind.optional(field)
+                    && r.values
+                        .get(*field)
+                        .is_none_or(|v| matches!(v,Value::Text(t)if t.is_empty()))
+                {
+                    continue;
+                }
+                if r.kind == Kind::Policy
+                    && r.text("ServiceKind") == Some("accounting-only")
+                    && matches!(
+                        *field,
+                        "SSID"
+                            | "ConnectSecurity"
+                            | "AuthenticationProfile"
+                            | "ReauthenticateSeconds"
+                    )
+                {
+                    continue;
+                }
                 let valid = match (ty, r.values.get(*field)) {
                     (Field::Text, Some(Value::Text(s))) => !s.is_empty() && !s.contains('\0'),
                     (Field::List, Some(Value::List(v))) => {
@@ -254,6 +338,11 @@ impl Stored {
                             && v.len() <= 256
                             && v.iter().all(|s| !s.is_empty() && !s.contains('\0'))
                             && v.iter().collect::<BTreeSet<_>>().len() == v.len()
+                    }
+                    (Field::Number, Some(Value::Number(n)))
+                        if matches!(*field, "Disconnect" | "AccountingRequired") =>
+                    {
+                        *n <= 1
                     }
                     (Field::Number, Some(Value::Number(n))) => *n > 0,
                     (Field::Descriptor, Some(Value::Text(s))) => !s.is_empty(),
@@ -306,6 +395,20 @@ impl Stored {
                         "AuthenticationMethods",
                         "unsupported or duplicate authentication methods",
                     );
+                }
+            }
+            if r.kind == Kind::Quota {
+                if let Err(e) = crate::accounting::quota(r) {
+                    issue(&r.id, "Quota", &e);
+                }
+            }
+            if r.kind == Kind::AccountingProfile {
+                if let Some(definition) = r.text("Definition") {
+                    if let Err(e) =
+                        radius_accounting::profile::Profile::parse(definition.as_bytes())
+                    {
+                        issue(&r.id, "Definition", &e.to_string());
+                    }
                 }
             }
             if r.kind == Kind::Identity {

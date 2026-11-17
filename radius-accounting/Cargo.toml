@@ -1,0 +1,16 @@
+[package]
+name = "radius-accounting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ring.workspace = true
+md-5.workspace = true
+hmac.workspace = true
+subtle.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+time = "=0.3.55"

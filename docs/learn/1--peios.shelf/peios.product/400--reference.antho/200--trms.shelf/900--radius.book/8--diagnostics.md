@@ -27,6 +27,14 @@ It does not confirm AP admission, DHCP, or internet access. A send failure,
 timeout, and credential refusal are separate outcomes. A TLS timeout does not
 prove that the person rejected a certificate.
 
+An explicit authority denial for failed credentials or a restricted account
+uses the generic `authentication-failed` reason. Unknown accounts and
+incorrect passwords share that reason. Authority outages, other authority
+denials, and client transport or protocol failures use
+`authority-unavailable`; they do not establish that the supplied credentials
+were wrong. The authority's free-form error message is not copied into this
+classification.
+
 Stage sequence numbers order one attempt. Elapsed milliseconds use the local
 monotonic clock. Event timestamps can move after a wall-clock adjustment.
 Separate services have separate event orders; nearby timestamps do not prove

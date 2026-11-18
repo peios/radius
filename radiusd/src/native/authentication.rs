@@ -145,11 +145,7 @@ impl Backend for Auth {
                 }
                 _ => Progress::Failed(Reason::Credentials),
             },
-            Err(error) => Progress::Failed(if error.category == 1 {
-                Reason::Credentials
-            } else {
-                Reason::Backend
-            }),
+            Err(error) => Progress::Failed(authentication_failure(&error)),
         }
     }
     fn mschapv2_response(&mut self, work: &mut Work, response: &[u8; 40]) -> Result<(), Reason> {
@@ -184,6 +180,18 @@ impl Backend for Auth {
     }
     fn policy_facts(&self, subject: &Authenticated) -> Result<radius_policy::Facts, Reason> {
         policy_facts(subject)
+    }
+}
+
+fn authentication_failure(error: &peios_auth::Error) -> Reason {
+    // peios/auth.h: category 6 is PGSS_DENIAL; category 1 is UNAVAILABLE.
+    // PGSS AuthenticationFailed (4) includes unknown accounts and bad proofs;
+    // AccountRestricted (6) uses the same public label to avoid distinguishing
+    // account state. Other denials and client failures describe the authority
+    // path, not a bad credential. Never classify from its free-form message.
+    match (error.category, error.code) {
+        (6, 4 | 6) => Reason::Credentials,
+        _ => Reason::Backend,
     }
 }
 
@@ -389,4 +397,45 @@ fn convert_claim(claim: &peios_auth::Claim) -> Result<Claim, Reason> {
         flags: ClaimAttr::from_bits_retain(claim.flags),
         values,
     })
+}
+
+#[cfg(test)]
+mod authentication_failure_tests {
+    use super::*;
+
+    fn error(category: u32, code: u32) -> peios_auth::Error {
+        peios_auth::Error {
+            category,
+            code,
+            outcome_unknown: false,
+            message: "authentication failed".into(),
+        }
+    }
+
+    #[test]
+    fn credential_and_account_denials_share_the_generic_failure_label() {
+        for code in [4, 6] {
+            let reason = authentication_failure(&error(6, code));
+            assert_eq!(reason, Reason::Credentials);
+            assert_eq!(reason.name(), "authentication-failed");
+        }
+    }
+
+    #[test]
+    fn other_pgss_denials_are_authority_failures() {
+        for code in [0, 1, 2, 3, 5, 7, 8, 9, 10, 11, u32::MAX] {
+            assert_eq!(authentication_failure(&error(6, code)), Reason::Backend);
+        }
+    }
+
+    #[test]
+    fn client_failures_cannot_be_mistaken_for_pgss_denials() {
+        for category in [0, 1, 2, 3, 4, 5, 7, u32::MAX] {
+            for code in [0, 4, 6, 7, u32::MAX] {
+                let reason = authentication_failure(&error(category, code));
+                assert_eq!(reason, Reason::Backend);
+                assert_eq!(reason.name(), "authority-unavailable");
+            }
+        }
+    }
 }

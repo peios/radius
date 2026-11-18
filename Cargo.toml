@@ -22,8 +22,8 @@ debug = 0
 incremental = false
 
 [replace]
-# GXWI clients still pin the previous bindings. Use one peios-sys link identity
-# throughout this program until those libraries advance their own pins.
+# RADIUS needs the read-snapshot bindings at b1290db. GXWI clients use its
+# ancestor 7c05d93; keep one peios-sys link identity throughout this program.
 "https://github.com/peios/peios-rs.git#peios:0.4.0" = { git = "https://github.com/peios/peios-rs.git", rev = "b1290dbfa805d4ef151d3fc961a8d89d6c30c12c" }
 
 [profile.release]

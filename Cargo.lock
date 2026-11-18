@@ -457,14 +457,14 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 [[package]]
 name = "gxwi"
 version = "0.0.7"
-source = "git+https://github.com/peios/gxwi.git?rev=dd54c32e6b7450726fd1e362986a623a1dd15b0f#dd54c32e6b7450726fd1e362986a623a1dd15b0f"
+source = "git+https://github.com/peios/gxwi.git?rev=820f5403c2431796908f0472baca6356bf9b5272#820f5403c2431796908f0472baca6356bf9b5272"
 dependencies = [
  "axum",
  "gxwi-abi",
  "hyper",
  "hyper-util",
  "libc",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=3950d35950c46cb3538885b7cf05bde059393def)",
+ "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e)",
  "serde",
  "serde_json",
  "tokio",
@@ -474,15 +474,15 @@ dependencies = [
 [[package]]
 name = "gxwi-abi"
 version = "0.0.7"
-source = "git+https://github.com/peios/gxwi.git?rev=dd54c32e6b7450726fd1e362986a623a1dd15b0f#dd54c32e6b7450726fd1e362986a623a1dd15b0f"
+source = "git+https://github.com/peios/gxwi.git?rev=820f5403c2431796908f0472baca6356bf9b5272#820f5403c2431796908f0472baca6356bf9b5272"
 
 [[package]]
 name = "gxwi-sd-editor"
 version = "0.1.0"
-source = "git+https://github.com/peios/gxwi-essentials.git?rev=5f17992fd34c3432d98cb18adf8835fb99ce552a#5f17992fd34c3432d98cb18adf8835fb99ce552a"
+source = "git+https://github.com/peios/gxwi-essentials.git?rev=898ecfe2f80372113e1799b2e0a6beddd00e4c6e#898ecfe2f80372113e1799b2e0a6beddd00e4c6e"
 dependencies = [
  "base64",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=3950d35950c46cb3538885b7cf05bde059393def)",
+ "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e)",
  "serde",
  "serde_json",
 ]
@@ -869,7 +869,7 @@ dependencies = [
 [[package]]
 name = "peios"
 version = "0.4.0"
-source = "git+https://github.com/peios/peios-rs.git?rev=3950d35950c46cb3538885b7cf05bde059393def#3950d35950c46cb3538885b7cf05bde059393def"
+source = "git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e#7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e"
 replace = "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)"
 
 [[package]]

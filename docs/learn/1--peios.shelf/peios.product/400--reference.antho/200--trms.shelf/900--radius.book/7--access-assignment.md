@@ -121,6 +121,14 @@ reauthentication. The AP controls how it applies a changed VLAN. Policy edits
 do not themselves send Disconnect or CoA requests; accounting enforcement
 retains its separate Disconnect behavior.
 
+A VLAN change does not assign the client's IP configuration. A client can
+retain its previous DHCP lease after reauthentication and lose connectivity
+until it disconnects and reconnects. Do not assume a live VLAN change is
+seamless: qualify both the AP's assignment and the client's address renewal.
+DHCP's [network-change guidance](https://www.rfc-editor.org/rfc/rfc2131.html#section-3.7)
+describes address verification after disconnection. When testing a change,
+check the client's address, gateway, and connectivity on both networks.
+
 VLAN assignment uses the three tunnel attributes described in [RFC 3580
 section 3.31](https://www.rfc-editor.org/rfc/rfc3580.html#section-3.31), with
 a zero tag and a decimal VLAN string. radiusd signs the complete response,

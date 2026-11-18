@@ -232,6 +232,23 @@ bounds, exact replay, policy changes, preserved deadlines, binding
 invalidation, and cancellation. Native SDK tests cover typed claims,
 known absence, and missing device or audit context.
 
+## Diagnostic reader qualification
+
+Stage eventd and evctl in the replaceable runtime, plus the
+`native-diagnostics` Cargo example in the share's `bin` directory. In a fresh
+disposable guest, `tests/native/diagnostics.sh` provisions the fixture and
+checks actual attempt history, exact authd operation links, caller identity,
+delegated event reads, and denial of personal fields. It also checks that
+authentication continues through an eventd outage and tight emission bounds.
+
+The script defaults to eventd's Service identity. The explicit override
+`RADIUS_DIAGNOSTICS_EVENTD_IDENTITY=SYSTEM` isolates query checks when normal
+service ingestion is unavailable. A pass with that override does not qualify
+the Service deployment. The fixture must not be applied to a deployed machine.
+
+The CLI and GXWI require a working, separately provisioned eventd deployment
+for diagnostic history. RADIUS authentication remains independent of it.
+
 Passing these checks is development evidence, not a production release
 or a complete security audit. Real UniFi/iPhone TTLS/PAP connectivity and
 a profile-free iPhone join through PEAP have succeeded in development

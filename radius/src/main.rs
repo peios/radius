@@ -20,14 +20,26 @@ fn main() {
         print!("{}", cli::HELP);
         return;
     }
-    let result = if json
+    let result = if args.first().map(String::as_str) == Some("diagnostics")
+        && args.get(1).map(String::as_str) == Some("follow")
+    {
+        #[cfg(feature = "native")]
+        {
+            cli::follow_diagnostics(&args[2..], json).map(|()| serde_json::Value::Null)
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            cli::run(&args)
+        }
+    } else if json
         && matches!(
             args.iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>()
                 .as_slice(),
             ["client", "secret", _, "show"]
-        ) {
+        )
+    {
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "secret show writes raw bytes; omit --json",

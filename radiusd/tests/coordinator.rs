@@ -40,6 +40,9 @@ impl Drop for Work {
 impl Backend for Fake {
     type Work = Work;
     type Subject = ();
+    fn operation_guid(&self, _: &Work) -> Option<[u8; 16]> {
+        Some([17; 16])
+    }
     fn begin(&mut self, v: Verification) -> Result<Work, Reason> {
         let radius_core::Credential::Password(password) = &v.credentials.proof else {
             panic!("expected PAP");
@@ -94,16 +97,22 @@ impl Backend for Fake {
 }
 #[derive(Default)]
 struct Out {
+    progress: Vec<radius_management::diagnostics::Record>,
+    diagnostic: Vec<radius_management::diagnostics::Record>,
     replies: VecDeque<Vec<u8>>,
     events: Vec<(Reason, Option<String>, Option<String>)>,
     deliver: bool,
 }
 impl Output for Out {
+    fn progress(&mut self, record: &radius_management::diagnostics::Record) {
+        self.progress.push(record.clone());
+    }
     fn send(&mut self, _: usize, r: &Reply) -> bool {
         self.replies.push_back(r.bytes.clone());
         self.deliver
     }
     fn event(&mut self, e: Event<'_>) {
+        self.diagnostic.push(e.diagnostic);
         self.events.push((
             e.reason,
             e.username.map(str::to_owned),
@@ -144,6 +153,8 @@ fn setup_peers() -> (Setup, ClientConnection) {
     let tls_client =
         ClientConnection::new(client, ServerName::try_from("radius.test").unwrap()).unwrap();
     let config = Config {
+        labels: Default::default(),
+        diagnostics: Default::default(),
         saved_fingerprint: String::new(),
         listeners: vec!["127.0.0.1:1812".parse().unwrap()],
         limits: Limits {
@@ -164,6 +175,7 @@ fn setup_peers() -> (Setup, ClientConnection) {
         networks: BTreeMap::from([(
             "home".into(),
             Network {
+                authentication_profile: None,
                 access: access_policy(),
                 enabled: true,
                 tls: None,
@@ -326,10 +338,43 @@ fn accounting_completion_gates_accept_and_cached_class_is_exact() {
     let last = pending(&mut d, tls, &mut out, now);
     d.tick(now, &mut out);
     assert!(out.replies.is_empty() && out.events.is_empty());
+    let milestones = out.progress.len();
+    for _ in 0..50 {
+        d.tick(now, &mut out);
+    }
+    assert_eq!(
+        out.progress.len(),
+        milestones,
+        "polling the same pending operation adds no milestones"
+    );
     committed.set(true);
     d.tick(now, &mut out);
     let reply = out.replies.pop_front().unwrap();
     assert_eq!(reply[0], 2);
+    let summary = out.diagnostic.last().unwrap();
+    assert_eq!(summary["outcome.success"], true);
+    assert_eq!(
+        summary["object.authentication.operation.guid"],
+        radius_management::diagnostics::hex(&[17; 16])
+    );
+    let records = serde_json::to_string(&out.progress).unwrap();
+    assert_eq!(
+        out.progress
+            .iter()
+            .filter(|record| record
+                .get("object.radiusd.progress.stage")
+                .and_then(serde_json::Value::as_str)
+                == Some("method")
+                && record
+                    .get("object.radiusd.progress.result")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("selected"))
+            .count(),
+        1,
+        "the offered method becomes selected after the client's response"
+    );
+    assert!(!records.contains("password"));
+    assert!(!records.contains(std::str::from_utf8(SECRET).unwrap()));
     let mut pos = 20;
     let mut class = None;
     let mut timeout = None;
@@ -354,6 +399,29 @@ fn accounting_completion_gates_accept_and_cached_class_is_exact() {
     d.receive(now, 0, peer(), &last, &mut out);
     assert_eq!(out.replies.pop_front().unwrap(), reply);
     assert_eq!(calls.get(), before);
+}
+
+#[test]
+fn retransmitting_the_initial_request_does_not_restart_its_diagnostic_timeline() {
+    let (config, _, backend, _, _, _) = setup();
+    let mut driver = Driver::new(Arc::new(config), backend).unwrap();
+    let mut out = Out {
+        deliver: true,
+        ..Default::default()
+    };
+    let packet = request(1, 0, None, 1, b"anonymous", Some(b"aa-bb-cc-dd-ee-ff:Home"));
+    let now = Instant::now();
+    driver.receive(now, 0, peer(), &packet, &mut out);
+    let first = out.replies.pop_front().unwrap();
+    let count = out.progress.len();
+    driver.receive(now, 0, peer(), &packet, &mut out);
+    assert_eq!(out.replies.pop_front().unwrap(), first);
+    assert_eq!(out.progress.len(), count);
+    driver.tick(now + Duration::from_secs(31), &mut out);
+    assert_eq!(
+        out.diagnostic.last().unwrap()["object.radiusd.retransmissions"],
+        1
+    );
 }
 #[test]
 fn exhausted_accounting_allowance_cannot_emit_accept_or_class() {
@@ -638,6 +706,7 @@ fn conflicting_client_prefix_or_network_ssid_is_rejected() {
     config.networks.insert(
         "alias".into(),
         Network {
+            authentication_profile: None,
             access: access_policy(),
             enabled: true,
             tls: None,

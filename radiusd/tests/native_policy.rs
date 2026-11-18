@@ -46,6 +46,7 @@ fn check(subject: &Authenticated, text: &str) -> Result<(), Reason> {
         subject,
         "qualification",
         &Network {
+            authentication_profile: None,
             access: std::sync::Arc::new(radius_policy::Policy::compile(&[], &[]).unwrap()),
             enabled: true,
             tls: None,

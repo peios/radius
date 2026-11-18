@@ -66,6 +66,9 @@ pub trait Backend {
     fn begin(&mut self, verification: Verification) -> Result<Self::Work, Reason>;
     /// Must make bounded, nonblocking progress. Drop cancels unfinished work.
     fn step(&mut self, work: &mut Self::Work) -> Progress<Self::Subject>;
+    fn operation_guid(&self, _work: &Self::Work) -> Option<[u8; 16]> {
+        None
+    }
     fn mschapv2_response(
         &mut self,
         _work: &mut Self::Work,
@@ -99,6 +102,7 @@ pub trait Backend {
     fn completed(&mut self, _id: &[u8; 16]) {}
 }
 pub struct Event<'a> {
+    pub diagnostic: radius_management::diagnostics::Record,
     pub id: &'a [u8; 16],
     pub client: u64,
     pub network: u64,
@@ -108,6 +112,16 @@ pub struct Event<'a> {
     pub reason: Reason,
 }
 pub trait Output {
+    fn progress(&mut self, _record: &radius_management::diagnostics::Record) {}
+    fn discarded_sample(
+        &mut self,
+        _reason: &'static str,
+        _listener: usize,
+        _peer: SocketAddr,
+        _client: Option<&str>,
+    ) {
+        self.discarded();
+    }
     /// Operational diagnostics containing rule paths, never supplied facts.
     fn policy_issue(&mut self, _id: &[u8; 16], _issue: &str) {}
     /// Submission to UDP is a delivery boundary, not proof the AP admitted Wi-Fi.
@@ -116,6 +130,7 @@ pub trait Output {
     fn discarded(&mut self) {}
 }
 struct Attempt<W, S> {
+    trace: crate::diagnostics::Trace,
     challenge: Option<[u8; 16]>,
     listener: usize,
     binding: Binding,
@@ -181,15 +196,27 @@ impl<B: Backend> Driver<B> {
         output: &mut impl Output,
     ) {
         let Some(client) = self.config.client(peer.ip()) else {
-            return output.discarded();
+            return output.discarded_sample("unknown-client", listener, peer, None);
         };
         // A disabled, most-specific client must not fall back to a wider range.
         if !client.enabled {
-            return output.discarded();
+            return output.discarded_sample("disabled-client", listener, peer, Some(&client.name));
         }
         // Verify integrity before interpreting any AP-supplied network name.
-        let Ok(request) = radius_core::wire::Request::parse(bytes, &client.secret) else {
-            return output.discarded();
+        let request = match radius_core::wire::Request::parse(bytes, &client.secret) {
+            Ok(request) => request,
+            Err(error) => {
+                return output.discarded_sample(
+                    if error == radius_core::Error::Integrity {
+                        "integrity-failed"
+                    } else {
+                        "malformed-request"
+                    },
+                    listener,
+                    peer,
+                    Some(&client.name),
+                )
+            }
         };
         let selected = if let Some(id) = request.state {
             let bound = self
@@ -198,38 +225,79 @@ impl<B: Backend> Driver<B> {
                 .map(|a| &a.binding)
                 .or_else(|| self.completed.get(&id).map(|(binding, _)| binding));
             let Some(bound) = bound else {
-                return output.discarded();
+                return output.discarded_sample(
+                    "unknown-state",
+                    listener,
+                    peer,
+                    Some(&client.name),
+                );
             };
             let Some((current, name, network)) = self.config.bound(bound) else {
-                return output.discarded();
+                return output.discarded_sample(
+                    "stale-binding",
+                    listener,
+                    peer,
+                    Some(&client.name),
+                );
             };
             if current.name != client.name {
-                return output.discarded();
+                return output.discarded_sample(
+                    "client-mismatch",
+                    listener,
+                    peer,
+                    Some(&client.name),
+                );
             }
             if let Some(called) = request.called_station {
                 if called_ssid(called) != Some(network.ssid.as_slice()) {
-                    return output.discarded();
+                    return output.discarded_sample(
+                        "network-mismatch",
+                        listener,
+                        peer,
+                        Some(&client.name),
+                    );
                 }
             }
             (name, network)
         } else {
             if !self.ready {
+                output.discarded_sample(
+                    "configuration-unavailable",
+                    listener,
+                    peer,
+                    Some(&client.name),
+                );
                 return;
             }
             let Some(ssid) = request.called_station.and_then(called_ssid) else {
-                return output.discarded();
+                return output.discarded_sample(
+                    "missing-network",
+                    listener,
+                    peer,
+                    Some(&client.name),
+                );
             };
             let Some(network) = self.config.network(client, ssid) else {
-                return output.discarded();
+                return output.discarded_sample(
+                    "network-not-permitted",
+                    listener,
+                    peer,
+                    Some(&client.name),
+                );
             };
             network
         };
         if !selected.1.enabled {
-            return output.discarded();
+            return output.discarded_sample("disabled-network", listener, peer, Some(&client.name));
         }
         if let Some(tls) = &selected.1.tls {
             if self.engine.update_tls(tls.clone()).is_err() {
-                return output.discarded();
+                return output.discarded_sample(
+                    "tls-configuration",
+                    listener,
+                    peer,
+                    Some(&client.name),
+                );
             }
         }
         let binding = self.config.binding(client, selected.0, peer.ip());
@@ -239,28 +307,117 @@ impl<B: Backend> Driver<B> {
             secret: &client.secret,
             policy_generation: policy,
         };
-        match self
-            .engine
-            .receive_with_methods(now, peer, context, bytes, &selected.1.methods)
-        {
+        let outcome =
+            self.engine
+                .receive_with_methods(now, peer, context, bytes, &selected.1.methods);
+        if let Some(id) = request.state {
+            if let Some(a) = self.attempts.get_mut(&id) {
+                if let Some((method, tls, repeated, selected)) =
+                    self.engine.diagnostic_progress(&id)
+                {
+                    let changed = a.trace.method != method.name();
+                    a.trace.method = method.name();
+                    if selected {
+                        a.trace.stage("method", "selected", output);
+                    } else if changed {
+                        a.trace.stage("method", "offered", output);
+                    }
+                    a.trace.set("object.radiusd.retransmissions", repeated);
+                    if tls && !a.trace.tls_ready {
+                        a.trace.tls_ready = true;
+                        a.trace.stage("tls", "established", output);
+                    }
+                }
+            }
+        }
+        if let Some((id, error)) = self.engine.take_terminal_failure() {
+            if let Some(a) = self.attempts.get_mut(&id) {
+                a.trace.failure = Some(if error == radius_core::Error::Tls {
+                    "tls-failed"
+                } else {
+                    "protocol-failed"
+                });
+                a.trace.set(
+                    "outcome.reason",
+                    if error == radius_core::Error::Tls {
+                        "tls-failed"
+                    } else {
+                        "protocol-failed"
+                    },
+                );
+                a.trace.stage(
+                    if error == radius_core::Error::Tls {
+                        "tls"
+                    } else {
+                        "protocol"
+                    },
+                    "failed",
+                    output,
+                );
+            }
+        }
+        match outcome {
             Ok(Outcome::Reply(reply)) => {
                 // A pending reload must not replay an old Access-Accept.
                 if reply.bytes[0] == 2 && !self.ready {
                     return;
                 }
                 if let Some(id) = reply_state(&reply.bytes) {
-                    if self.engine.has_attempt(&id) {
-                        self.attempts.entry(id).or_insert(Attempt {
-                            challenge: None,
-                            listener,
-                            binding,
-                            username: None,
-                            work: None,
-                            result: None,
-                            cancelled: false,
-                            station: request.station.map(Vec::from),
-                            authorised: None,
-                        });
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        self.attempts.entry(id)
+                    {
+                        if self.engine.has_attempt(&id) {
+                            entry.insert(Attempt {
+                                trace: {
+                                    let mut trace = crate::diagnostics::Trace::new(
+                                        crate::diagnostics::Context {
+                                            id: &id,
+                                            peer,
+                                            listener: self.config.listeners.get(listener).copied(),
+                                            client: &client.name,
+                                            network: selected.0,
+                                            policy: selected.1,
+                                            config: &self.config,
+                                            now,
+                                        },
+                                    );
+                                    if let Some(station) =
+                                        request.station.and_then(radius_policy::station_mac)
+                                    {
+                                        trace.set(
+                                            "source.radiusd.station",
+                                            station
+                                                .iter()
+                                                .map(|b| format!("{b:02x}"))
+                                                .collect::<Vec<_>>()
+                                                .join(":"),
+                                        );
+                                    }
+                                    trace.stage("started", "observed", output);
+                                    trace.stage("method", "offered", output);
+                                    trace
+                                },
+                                challenge: None,
+                                listener,
+                                binding,
+                                username: None,
+                                work: None,
+                                result: None,
+                                cancelled: false,
+                                station: request.station.map(Vec::from),
+                                authorised: None,
+                            });
+                        }
+                    }
+                }
+                if let Some(id) = reply_state(&reply.bytes) {
+                    if let (Some(attempt), Some((_, _, repeated, _))) = (
+                        self.attempts.get_mut(&id),
+                        self.engine.diagnostic_progress(&id),
+                    ) {
+                        attempt
+                            .trace
+                            .set("object.radiusd.retransmissions", repeated);
                     }
                 }
                 let delivered = output.send(listener, &reply);
@@ -290,6 +447,10 @@ impl<B: Backend> Driver<B> {
                     attempt.username = std::str::from_utf8(&verification.credentials.username)
                         .ok()
                         .map(str::to_owned);
+                    if let Some(name) = &attempt.username {
+                        attempt.trace.set("source.radiusd.username", name.clone());
+                    }
+                    attempt.trace.stage("credentials", "pending", output);
                     if active >= self.config.verifications {
                         attempt.result = Some(Err(Reason::Busy));
                     } else {
@@ -314,7 +475,16 @@ impl<B: Backend> Driver<B> {
                 }
             }
             Ok(Outcome::Drop) => {}
-            _ => output.discarded(),
+            Err(error) => output.discarded_sample(
+                match error {
+                    radius_core::Error::Limit => "conversation-limit",
+                    radius_core::Error::Binding => "binding-mismatch",
+                    _ => "protocol-rejected",
+                },
+                listener,
+                peer,
+                Some(&client.name),
+            ),
         }
     }
     pub fn tick(&mut self, now: Instant, output: &mut impl Output) {
@@ -339,16 +509,27 @@ impl<B: Backend> Driver<B> {
                 continue;
             }
             if let Some(work) = attempt.work.as_mut() {
-                match self.backend.step(work) {
+                let progress = self.backend.step(work);
+                attempt.trace.authority(self.backend.operation_guid(work));
+                match progress {
                     Progress::Waiting => {}
                     Progress::Mschapv2Challenge(challenge) => {
                         attempt.challenge = Some(challenge);
                     }
                     Progress::Complete(subject) => {
+                        let (name, sid) = self.backend.identity(&subject);
+                        attempt.trace.set("object.radiusd.canonical-name", name);
+                        attempt.trace.set(
+                            "object.account.sid",
+                            radius_management::diagnostics::hex(sid),
+                        );
+                        attempt.trace.stage("credentials", "verified", output);
                         attempt.work = None;
                         attempt.result = Some(Ok(subject));
                     }
                     Progress::Failed(reason) => {
+                        attempt.trace.set("outcome.reason", reason.name());
+                        attempt.trace.stage("credentials", "failed", output);
                         attempt.work = None;
                         attempt.result = Some(Err(reason));
                     }
@@ -397,7 +578,38 @@ impl<B: Backend> Driver<B> {
             };
             let mut extras = AdmissionExtras::default();
             let mut vlan = None;
+            attempt.trace.set(
+                "object.radiusd.config.fingerprint",
+                radius_management::diagnostics::hex(&self.config.fingerprint),
+            );
+            attempt.trace.set(
+                "object.radiusd.config.saved-fingerprint",
+                self.config.saved_fingerprint.clone(),
+            );
+            if result.is_ok() {
+                if reason != Reason::Granted {
+                    attempt.trace.set("outcome.reason", reason.name());
+                }
+                attempt.trace.stage(
+                    "permissions",
+                    if reason == Reason::Granted {
+                        "granted"
+                    } else {
+                        "refused"
+                    },
+                    output,
+                );
+            }
             if reason == Reason::Granted {
+                for key in [
+                    "object.radiusd.assignment.profile.id",
+                    "object.radiusd.assignment.rule.id",
+                    "object.radiusd.assignment.profile.name",
+                    "object.radiusd.assignment.rule.name",
+                    "object.radiusd.assignment.vlan",
+                ] {
+                    attempt.trace.fields.remove(key);
+                }
                 let assignment = self
                     .backend
                     .policy_facts(result.as_ref().unwrap())
@@ -425,17 +637,58 @@ impl<B: Backend> Driver<B> {
                         {
                             facts.insert("Request.Station".into(), vec![Scalar::Mac(station)]);
                         }
-                        network.access.assignment(&facts).map_err(|issue| {
-                            output.policy_issue(&id, &issue);
-                            Reason::Policy
-                        })
+                        network
+                            .access
+                            .assignment_with_rule(&facts)
+                            .map_err(|issue| {
+                                attempt.trace.set(
+                                    "outcome.detail",
+                                    issue.chars().take(256).collect::<String>(),
+                                );
+                                attempt.trace.set("outcome.reason", Reason::Policy.name());
+                                output.policy_issue(&id, &issue);
+                                Reason::Policy
+                            })
                     });
                 match assignment {
-                    Ok(value) => vlan = value.vlan,
-                    Err(error) => reason = error,
+                    Ok((value, rule)) => {
+                        vlan = value.vlan;
+                        if let Some(label) = self
+                            .config
+                            .labels
+                            .get(&format!("AccessProfiles/{}", value.profile))
+                        {
+                            attempt
+                                .trace
+                                .set("object.radiusd.assignment.profile.name", label.clone());
+                        }
+                        attempt
+                            .trace
+                            .set("object.radiusd.assignment.profile.id", value.profile);
+                        if let Some(rule) = rule {
+                            if let Some(label) = self.config.labels.get(&format!("Rules/{rule}")) {
+                                attempt
+                                    .trace
+                                    .set("object.radiusd.assignment.rule.name", label.clone());
+                            }
+                            attempt.trace.set("object.radiusd.assignment.rule.id", rule);
+                        }
+                        if let Some(vlan) = vlan {
+                            attempt
+                                .trace
+                                .set("object.radiusd.assignment.vlan", u64::from(vlan));
+                        }
+                        attempt.trace.stage("assignment", "granted", output);
+                    }
+                    Err(error) => {
+                        reason = error;
+                        attempt.trace.set("outcome.reason", error.name());
+                        attempt.trace.stage("assignment", "refused", output);
+                    }
                 }
             }
             if reason == Reason::Granted && self.engine.final_admission(&id) {
+                attempt.trace.stage("accounting", "pending", output);
                 match self.backend.accounting(
                     result.as_ref().unwrap(),
                     AdmissionContext {
@@ -447,13 +700,20 @@ impl<B: Backend> Driver<B> {
                         saved_fingerprint: &self.config.saved_fingerprint,
                     },
                 ) {
-                    Ok(Some(value)) => extras = value,
+                    Ok(Some(value)) => {
+                        extras = value;
+                        attempt.trace.stage("accounting", "granted", output);
+                    }
                     Ok(None) => {
                         attempt.result = Some(result);
                         self.attempts.insert(id, attempt);
                         continue;
                     }
-                    Err(error) => reason = error,
+                    Err(error) => {
+                        reason = error;
+                        attempt.trace.set("outcome.reason", error.name());
+                        attempt.trace.stage("accounting", "refused", output);
+                    }
                 }
             }
             let context = Client {
@@ -541,6 +801,7 @@ fn emit<B: Backend>(
 ) {
     let identity = subject.map(|s| backend.identity(s));
     output.event(Event {
+        diagnostic: attempt.trace.terminal(reason),
         id,
         client: attempt.binding.client,
         network: attempt.binding.network,

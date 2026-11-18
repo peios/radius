@@ -34,6 +34,9 @@ impl Drop for Work {
 impl Backend for Auth {
     type Work = Work;
     type Subject = Authenticated;
+    fn operation_guid(&self, work: &Work) -> Option<[u8; 16]> {
+        work.operation.operation_guid()
+    }
     fn begin(&mut self, verification: Verification) -> Result<Work, Reason> {
         let username = std::str::from_utf8(&verification.credentials.username)
             .map_err(|_| Reason::Credentials)?;

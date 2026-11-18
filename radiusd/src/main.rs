@@ -63,6 +63,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut announced = None;
     let mut bytes = [0u8; 65536];
     loop {
+        sink.flush_diagnostics();
         let accounting_snapshot = accounting.snapshot();
         let mut accounting_status = accounting.ledger.snapshot();
         accounting_status.available &= accounting_snapshot.as_ref().is_some_and(|s| s.ledger_ready);
@@ -111,6 +112,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     });
                     match activated {
                         Ok(sockets) => {
+                            sink.configure_diagnostics(config.diagnostics.clone());
                             sink.sockets = sockets;
                             if let Ok(mut s) = status.lock() {
                                 s.state = "active".into();

@@ -73,6 +73,7 @@ pub struct Client {
     pub networks: Vec<String>,
 }
 pub struct Network {
+    pub authentication_profile: Option<String>,
     pub access: Arc<radius_policy::Policy>,
     pub enabled: bool,
     pub tls: Option<Arc<rustls::ServerConfig>>,
@@ -84,6 +85,9 @@ pub struct Network {
     pub reauthenticate_seconds: u32,
 }
 pub struct Config {
+    /// Display-only labels observed with this configuration; never policy facts.
+    pub labels: BTreeMap<String, String>,
+    pub diagnostics: crate::diagnostics::Settings,
     pub saved_fingerprint: String,
     pub listeners: Vec<SocketAddr>,
     pub limits: Limits,
@@ -91,7 +95,8 @@ pub struct Config {
     pub clients: BTreeMap<String, Client>,
     pub networks: BTreeMap<String, Network>,
     pub tls: Arc<rustls::ServerConfig>,
-    /// Configuration fingerprint including referenced file contents; not a
+    /// Authentication fingerprint including referenced file contents, excluding
+    /// labels and diagnostic controls; not a
     /// Registry snapshot/generation guarantee. It only detects observed changes.
     pub fingerprint: [u8; 32],
 }

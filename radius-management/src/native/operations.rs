@@ -104,6 +104,15 @@ pub fn parse_field(kind: Kind, name: &str, value: &str) -> io::Result<Value> {
 }
 
 pub fn parse_setting(name: &str, text: &str) -> io::Result<Value> {
+    if crate::diagnostics::KNOBS
+        .iter()
+        .any(|(n, _, _, _)| *n == name)
+    {
+        return text
+            .parse()
+            .map(Value::Number)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "expected DWORD"));
+    }
     if crate::accounting::KNOBS.iter().any(|(n, _, _)| *n == name) {
         return text
             .parse::<u64>()

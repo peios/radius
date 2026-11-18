@@ -55,6 +55,9 @@ pub(crate) struct Tunnel {
 }
 
 impl Tunnel {
+    pub(crate) fn tls_ready(&self) -> bool {
+        !self.tls.is_handshaking()
+    }
     pub(crate) fn new_method(
         config: Arc<ServerConfig>,
         mtu: usize,

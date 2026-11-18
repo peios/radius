@@ -34,7 +34,7 @@
       "prefix": "github.com/peios/authd",
       "git": "https://github.com/peios/authd",
       "dir": "",
-      "rev": "5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652"
+      "rev": "7c4b936bae9ddd3e6ded8a682d64041195201b6d"
     },
     {
       "prefix": "github.com/gcslib/python",
@@ -95,8 +95,8 @@
       "path": "github.com/peios/authd",
       "git": "https://github.com/peios/authd",
       "dir": "",
-      "commit": "5f4fbcd66c9aaaf2bd1b5b0fb5e58069af0be652",
-      "tree": "eda8959ef7a91498b28c711db05bb48b58d0149b17352bce5443081f69b9dc17"
+      "commit": "7c4b936bae9ddd3e6ded8a682d64041195201b6d",
+      "tree": "5d5d6828e0747b74b6e60bacb956f6bd6103308d1aba6c084bdcd3376aafe592"
     },
     {
       "path": "github.com/peios/gxwi",

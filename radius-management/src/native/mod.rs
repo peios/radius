@@ -4,6 +4,7 @@ mod accounting_disconnect;
 pub mod configuration;
 pub mod control;
 pub mod credentials;
+pub mod diagnostics;
 pub mod operations;
 pub mod registry;
 pub mod service;

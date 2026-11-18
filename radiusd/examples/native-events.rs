@@ -70,8 +70,10 @@ fn main() {
                         .unwrap()
                         .as_bytes()
                 );
-                let Some(Value::Bool(success)) = data.remove("outcome.success") else {
-                    panic!("outcome missing")
+                let success = match data.remove("outcome.success") {
+                    Some(Value::Bool(success)) => success,
+                    None if event.event_type == "radiusd.diagnostics.reported" => true,
+                    _ => panic!("outcome missing"),
                 };
                 if !success {
                     let Some(Value::Text(reason)) = data.remove("outcome.reason") else {
@@ -110,11 +112,34 @@ fn main() {
                             denied += 1;
                         }
                     }
+                    kind if radius_management::diagnostics::STAGE_EVENTS
+                        .iter()
+                        .any(|(_, _, event)| *event == kind) => {}
+                    "radiusd.accounting.health.changed"
+                    | "radiusd.request.discarded"
+                    | "radiusd.diagnostics.reported" => {}
                     _ => panic!("uncatalogued radiusd event"),
                 }
                 // A closed set of typed fields also prevents accidental claim,
                 // packet, password, secret or key material being added silently.
-                assert!(data.is_empty(), "unexpected payload fields");
+                for (key, value) in data {
+                    use radius_management::diagnostics::{field_type, FieldType};
+                    assert!(
+                        match (field_type(&key), value) {
+                            (Some(FieldType::Text), Value::Text(_))
+                            | (Some(FieldType::Unsigned), Value::Number(_))
+                            | (Some(FieldType::Bool), Value::Bool(_)) => true,
+                            (Some(FieldType::Bytes), Value::Bytes(b)) =>
+                                if key.ends_with(".guid") {
+                                    b.len() == 16
+                                } else {
+                                    peios::security::SidRef::from_bytes(&b).is_some()
+                                },
+                            _ => false,
+                        },
+                        "unexpected or mistyped payload field: {key}"
+                    );
+                }
             }
         }
         if std::path::Path::new("/run/radiusd/qualification.done").exists() {

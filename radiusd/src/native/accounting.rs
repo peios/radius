@@ -37,6 +37,9 @@ impl AccountingAuth {
 impl Backend for AccountingAuth {
     type Work = Work;
     type Subject = Authenticated;
+    fn operation_guid(&self, work: &Work) -> Option<[u8; 16]> {
+        self.auth.operation_guid(work)
+    }
     fn begin(&mut self, v: Verification) -> Result<Work, Reason> {
         self.auth.begin(v)
     }

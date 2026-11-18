@@ -1,4 +1,5 @@
-use crate::driver::{Event, Output, Reason};
+use crate::driver::{Event, Output};
+mod diagnostics;
 use peios::{
     event::{self, EventPolicy, Tier},
     msgpack::Writer,
@@ -12,6 +13,7 @@ use std::{
 };
 
 pub struct Sink {
+    diagnostics: diagnostics::State,
     pub sockets: Vec<UdpSocket>,
     pub policy: EventPolicy,
     pub actor: Sid,
@@ -25,6 +27,7 @@ pub struct Sink {
 impl Sink {
     pub fn new(sockets: Vec<UdpSocket>, actor: Sid) -> peios::Result<Self> {
         Ok(Self {
+            diagnostics: diagnostics::State::default(),
             sockets,
             policy: EventPolicy::open()?,
             actor,
@@ -160,6 +163,30 @@ impl Sink {
     }
 }
 impl Output for Sink {
+    fn progress(&mut self, record: &radius_management::diagnostics::Record) {
+        use radius_management::diagnostics::{stage_event, STAGE};
+        let stage = record
+            .get(STAGE)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let result = record
+            .get("object.radiusd.progress.result")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if let Some(kind) = stage_event(stage, result) {
+            self.diagnostic_record(kind, record, false);
+        }
+    }
+    fn discarded_sample(
+        &mut self,
+        reason: &'static str,
+        listener: usize,
+        peer: std::net::SocketAddr,
+        client: Option<&str>,
+    ) {
+        self.diagnostic_drop(reason, listener, peer, client);
+        self.discarded();
+    }
     fn policy_issue(&mut self, id: &[u8; 16], issue: &str) {
         let attempt = id.iter().map(|b| format!("{b:02x}")).collect::<String>();
         self.warning(&format!(
@@ -185,59 +212,20 @@ impl Output for Sink {
         })
     }
     fn event(&mut self, e: Event<'_>) {
-        let kind = "radiusd.exchange.attempted";
-        if !matches!(self.policy.enabled(kind, Tier::Standard), Ok(true)) {
-            return;
-        }
-        let mut w = Writer::new();
-        w.write_map(3 + u32::from(e.username.is_some()));
-        w.write_str("subject")
-            .write_map(1)
-            .write_str("token")
-            .write_map(1)
-            .write_str("sid")
-            .write_bin(self.actor.as_bytes());
+        use radius_management::diagnostics::{hex, ATTEMPT};
+        let mut record = e.diagnostic;
+        record.insert(ATTEMPT.into(), hex(e.id).into());
+        record.insert("object.radiusd.client.id".into(), e.client.into());
+        record.insert("object.radiusd.network.id".into(), e.network.into());
         if let Some(username) = e.username {
-            w.write_str("source")
-                .write_map(1)
-                .write_str("radiusd")
-                .write_map(1)
-                .write_str("username")
-                .write_str(username);
+            record.insert("source.radiusd.username".into(), username.into());
         }
-        w.write_str("object")
-            .write_map(1 + u32::from(e.sid.is_some()));
-        w.write_str("radiusd")
-            .write_map(3 + u32::from(e.canonical.is_some()));
-        w.write_str("attempt")
-            .write_map(1)
-            .write_str("guid")
-            .write_bin(e.id);
-        w.write_str("client")
-            .write_map(1)
-            .write_str("id")
-            .write_uint(e.client);
-        w.write_str("network")
-            .write_map(1)
-            .write_str("id")
-            .write_uint(e.network);
         if let Some(name) = e.canonical {
-            w.write_str("canonical-name").write_str(name);
+            record.insert("object.radiusd.canonical-name".into(), name.into());
         }
         if let Some(sid) = e.sid {
-            w.write_str("account")
-                .write_map(1)
-                .write_str("sid")
-                .write_bin(sid);
+            record.insert("object.account.sid".into(), hex(sid).into());
         }
-        let success = e.reason == Reason::Granted;
-        w.write_str("outcome")
-            .write_map(if success { 1 } else { 2 })
-            .write_str("success")
-            .write_bool(success);
-        if !success {
-            w.write_str("reason").write_str(e.reason.name());
-        }
-        self.submit(kind, &w);
+        self.diagnostic_record("radiusd.exchange.attempted", &record, true);
     }
 }

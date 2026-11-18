@@ -347,6 +347,11 @@ impl Stored {
     }
     pub fn authentication_fingerprint(&self) -> String {
         let mut copy = self.clone();
+        copy.settings.retain(|name, _| {
+            !crate::diagnostics::KNOBS
+                .iter()
+                .any(|(key, _, _, _)| name == key)
+        });
         for record in &mut copy.objects {
             record.values.remove("Name");
         }

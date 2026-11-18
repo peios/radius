@@ -13,6 +13,7 @@ use std::{
 use zeroize::Zeroizing;
 
 gxwi::icon!(b"dev.peios.radius");
+mod diagnostics;
 type Action = Box<dyn FnOnce() -> io::Result<Outcome> + Send>;
 fn usage_history_graph(history: &[serde_json::Value]) -> String {
     let mut points: Vec<_> = history
@@ -63,12 +64,19 @@ enum Outcome {
     Accounting(serde_json::Value),
     AccountingView(&'static str, serde_json::Value),
     Explained(serde_json::Value),
+    Diagnostics(radius_management::diagnostics::View),
+    DiagnosticMonitor(radius_management::native::diagnostics::Monitor),
+    DiagnosticAuthority(Vec<radius_management::diagnostics::Record>),
 }
 struct Pending {
     description: String,
     action: Action,
 }
 struct Window {
+    diagnostics: radius_management::diagnostics::View,
+    diagnostic_monitor: Option<radius_management::native::diagnostics::Monitor>,
+    diagnostic_selected: Option<String>,
+    diagnostic_authority: Option<Result<Vec<radius_management::diagnostics::Record>, String>>,
     surface: Weak<Surface<Self>>,
     section: &'static str,
     stored: Result<Stored, String>,
@@ -396,8 +404,9 @@ impl Window {
         page
     }
 }
-const SECTIONS: [(&str, &str, Glyph); 11] = [
+const SECTIONS: [(&str, &str, Glyph); 12] = [
     ("overview", "Overview", Glyph::Server),
+    ("diagnostics", "Diagnostics", Glyph::Server),
     ("client", "Clients", Glyph::Globe),
     ("policy", "Access Policies", Glyph::Shield),
     ("profile", "Authentication Profiles", Glyph::Key),
@@ -411,6 +420,7 @@ const SECTIONS: [(&str, &str, Glyph); 11] = [
 ];
 fn section_tile(section: &str) -> Tile {
     match section {
+        "diagnostics" => Tile::Blue,
         "overview" => Tile::Blue,
         "client" => Tile::Teal,
         "policy" => Tile::Violet,
@@ -423,6 +433,7 @@ fn section_tile(section: &str) -> Tile {
 }
 fn section_about(section: &str) -> &'static str {
     match section {
+        "diagnostics"=>"Recorded authentication progress and outcomes, subject to your event permissions.",
         "client" => "Devices that send authentication requests to this server.",
         "policy" => "Who may connect, and which authentication profile each network uses.",
         "profile" => "Reusable authentication methods and server identities.",
@@ -607,6 +618,9 @@ impl Window {
         self.stored = stored;
     }
     fn section_summary(&self, section: &str) -> String {
+        if section == "diagnostics" {
+            return format!("{} attempts", self.diagnostics.attempts.len());
+        }
         if section == "overview" {
             return match self.overview["daemon"].as_str() {
                 Some("active") => "Running".into(),
@@ -667,6 +681,14 @@ impl Window {
                             w.accounting[key] = snapshot;
                         }
                         Ok(Outcome::Explained(result)) => w.explanation = Some(result),
+                        Ok(Outcome::Diagnostics(view)) => w.diagnostics = view,
+                        Ok(Outcome::DiagnosticMonitor(monitor)) => {
+                            w.diagnostics = monitor.snapshot();
+                            w.diagnostic_monitor = Some(monitor);
+                        }
+                        Ok(Outcome::DiagnosticAuthority(records)) => {
+                            w.diagnostic_authority = Some(Ok(records))
+                        }
                         Err(error) => w.said = Some(Err(error)),
                     }
                     fields.set("shared-secret", "");
@@ -1519,11 +1541,15 @@ impl Live for Window {
                 "",
             ));
         }
-        if let Err(error) = &self.stored {
-            page.push_str(&settings::banner(error));
+        if self.section != "diagnostics" {
+            if let Err(error) = &self.stored {
+                page.push_str(&settings::banner(error));
+            }
         }
         if self.section == "overview" {
             page.push_str(&self.overview_page());
+        } else if self.section == "diagnostics" {
+            page.push_str(&self.diagnostics_page());
         } else if self.section == "accounting" {
             page.push_str(&self.accounting_page());
         } else if self.section == "explain" {
@@ -1592,6 +1618,35 @@ impl Live for Window {
             return;
         }
         match name {
+            "diagnostics-follow"=>{match self.diagnostic_filter(fields){
+                Ok(filter)=>self.launch(Box::new(move||radius_management::native::diagnostics::Monitor::start(filter).map(Outcome::DiagnosticMonitor))),
+                Err(error)=>self.said=Some(Err(error.to_string())),
+            }},
+            "diagnostics-refresh"=>{match self.diagnostic_filter(fields){
+                Ok(filter)=>{self.diagnostic_monitor=None;self.launch(Box::new(move||radius_management::native::diagnostics::read(&filter).map(Outcome::Diagnostics)));},
+                Err(error)=>self.said=Some(Err(error.to_string())),
+            }},
+            "diagnostics-stop"=>{self.diagnostic_monitor=None;self.diagnostics.following=false;self.diagnostics.status="Following stopped".into();},
+            "diagnostics-select"=>{if let Some(id)=value.get("id").and_then(|v|v.as_str()){
+                self.diagnostic_selected=Some(id.into());self.diagnostic_authority=None;
+            }},
+            "diagnostics-authority"=>{
+                let id=self.diagnostics.attempts.iter().find(|a|Some(&a.id)==self.diagnostic_selected.as_ref())
+                    .and_then(|a|a.summary.get(radius_management::diagnostics::OPERATION)).and_then(serde_json::Value::as_str).map(str::to_owned);
+                if let Some(id)=id{self.launch(Box::new(move||radius_management::native::diagnostics::authority(&id).map(Outcome::DiagnosticAuthority)));}
+            },
+            "diagnostics-current"=>{
+                let section = match value.get("section").and_then(|v|v.as_str()) {
+                    Some("client")=>Some("client"), Some("policy")=>Some("policy"),
+                    Some("profile")=>Some("profile"), Some("access-profile")=>Some("access-profile"),
+                    Some("rule")=>Some("rule"), _=>None,
+                };
+                if let (Some(section),Some(id),Ok(stored))=(section,value.get("id").and_then(|v|v.as_str()),&self.stored){
+                    if let Some(record)=Kind::parse(section).and_then(|kind|stored.get(kind,id)).cloned(){
+                        self.section=section;self.begin_edit(record,false,fields);
+                    }
+                }
+            },
             "rule-child"=>{
                 if let Some(parent)=self.edit.clone().filter(|r|r.kind==Kind::Rule&&!self.creating&&self.writable) {
                     match Record::new(Kind::Rule,"") {
@@ -1914,6 +1969,10 @@ pub fn open() -> i32 {
     let surface = app.live(
         "RADIUS",
         Window {
+            diagnostics: Default::default(),
+            diagnostic_monitor: None,
+            diagnostic_selected: None,
+            diagnostic_authority: None,
             surface: Weak::new(),
             section: "overview",
             stored: read(),
@@ -1946,6 +2005,9 @@ pub fn open() -> i32 {
         let stored = read();
         let overview = overview();
         surface.update(|w, fields| {
+            if let Some(monitor) = &w.diagnostic_monitor {
+                w.diagnostics = monitor.snapshot();
+            }
             if !w.busy {
                 w.heard(stored, fields);
                 w.overview = overview;
@@ -2023,8 +2085,12 @@ mod tests {
         w.input("explain-user", &mut fields);
         assert!(w.explanation.is_none());
     }
-    fn window() -> Window {
+    pub(super) fn window() -> Window {
         Window {
+            diagnostics: Default::default(),
+            diagnostic_monitor: None,
+            diagnostic_selected: None,
+            diagnostic_authority: None,
             surface: Weak::new(),
             section: "overview",
             stored: Ok(Stored::default()),

@@ -499,9 +499,17 @@ impl Policy {
         self.evaluate(facts, true)
     }
     pub fn assignment(&self, facts: &Facts) -> Result<Assignment, String> {
+        self.assignment_with_rule(facts)
+            .map(|(assignment, _)| assignment)
+    }
+    /// The actual winning rule, without retaining supplied facts or full traces.
+    pub fn assignment_with_rule(
+        &self,
+        facts: &Facts,
+    ) -> Result<(Assignment, Option<String>), String> {
         let out = self.evaluate(facts, false)?;
         if let Some(assignment) = out.assignment {
-            return Ok(assignment);
+            return Ok((assignment, out.winner));
         }
         if out.outcome == "conflicting-profiles" {
             if let Some(first) = out

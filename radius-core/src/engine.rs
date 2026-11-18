@@ -161,6 +161,7 @@ struct CacheKey {
 }
 struct Cached {
     key: CacheKey,
+    attempt: [u8; 16],
     expires: Instant,
     bytes: Vec<u8>,
 }
@@ -172,6 +173,7 @@ struct Pending {
     secret: Zeroizing<Vec<u8>>,
 }
 struct Attempt {
+    retransmissions: u64,
     method: Method,
     offered: Vec<Method>,
     negotiated: bool,
@@ -196,6 +198,7 @@ impl Attempt {
 /// A caller-owned, single-threaded state machine. It performs no blocking I/O.
 /// A stalled backend can leave an attempt pending only until its fixed deadlines.
 pub struct Engine {
+    terminal_failure: Option<([u8; 16], Error)>,
     tls: Arc<rustls::ServerConfig>,
     limits: Limits,
     attempts: HashMap<[u8; 16], Attempt>,
@@ -214,6 +217,7 @@ impl Engine {
             return Err(Error::Configuration);
         }
         Ok(Self {
+            terminal_failure: None,
             tls,
             limits,
             attempts: HashMap::new(),
@@ -257,6 +261,21 @@ impl Engine {
         self.attempts.contains_key(id)
     }
 
+    /// A credential-free snapshot of observed protocol progress.
+    pub fn diagnostic_progress(&self, id: &[u8; 16]) -> Option<(Method, bool, u64, bool)> {
+        self.attempts.get(id).map(|a| {
+            (
+                a.method,
+                a.tunnel.tls_ready(),
+                a.retransmissions,
+                a.negotiated,
+            )
+        })
+    }
+    pub fn take_terminal_failure(&mut self) -> Option<([u8; 16], Error)> {
+        self.terminal_failure.take()
+    }
+
     /// Invalidate both conversations and cached terminal/challenge replies when
     /// the driver removes a trusted client/network binding.
     pub fn retain_bindings(&mut self, mut valid: impl FnMut(&Binding) -> bool) {
@@ -284,6 +303,7 @@ impl Engine {
         bytes: &[u8],
         methods: &[Method],
     ) -> Result<Outcome, Error> {
+        self.terminal_failure = None;
         if methods.is_empty()
             || methods.len() > 2
             || methods
@@ -321,6 +341,9 @@ impl Engine {
                 // the admission generation. Final admission still uses current policy.
                 && (c.key.policy == key.policy || c.bytes.first() == Some(&11))
         }) {
+            if let Some(attempt) = self.attempts.get_mut(&cached.attempt) {
+                attempt.retransmissions = attempt.retransmissions.saturating_add(1);
+            }
             return Ok(Outcome::Reply(Reply {
                 peer,
                 bytes: cached.bytes.clone(),
@@ -370,6 +393,7 @@ impl Engine {
             self.attempts.insert(
                 id,
                 Attempt {
+                    retransmissions: 0,
                     method: methods[0],
                     offered: vec![methods[0]],
                     negotiated: false,
@@ -389,7 +413,7 @@ impl Engine {
                     pending: None,
                 },
             );
-            self.remember(now, key, reply.clone());
+            self.remember(now, key, reply.clone(), id);
             return Ok(Outcome::Reply(Reply { peer, bytes: reply }));
         }
         let id = request.state.ok_or(Error::Protocol)?;
@@ -436,7 +460,7 @@ impl Engine {
                     None,
                 )?;
                 self.attempts.insert(id, attempt);
-                self.remember(now, key, reply.clone());
+                self.remember(now, key, reply.clone(), id);
                 return Ok(Outcome::Reply(Reply { peer, bytes: reply }));
             }
         }
@@ -498,10 +522,11 @@ impl Engine {
                     None,
                 )?;
                 self.attempts.insert(id, attempt);
-                self.remember(now, key, reply.clone());
+                self.remember(now, key, reply.clone(), id);
                 Ok(Outcome::Reply(Reply { peer, bytes: reply }))
             }
-            Err(_) => {
+            Err(error) => {
+                self.terminal_failure = Some((id, error));
                 let reply = wire::response(
                     request.identifier,
                     &request.authenticator,
@@ -511,7 +536,7 @@ impl Engine {
                     None,
                     None,
                 )?;
-                self.remember(now, key, reply.clone());
+                self.remember(now, key, reply.clone(), id);
                 Ok(Outcome::Reply(Reply { peer, bytes: reply }))
             }
         }
@@ -572,7 +597,7 @@ impl Engine {
         )?;
         let peer = pending.key.peer;
         self.attempts.insert(id, attempt);
-        self.remember(now, pending.key, bytes.clone());
+        self.remember(now, pending.key, bytes.clone(), id);
         Ok(Reply { peer, bytes })
     }
 
@@ -676,7 +701,7 @@ impl Engine {
             )?;
             let peer = pending.key.peer;
             self.attempts.insert(id, attempt);
-            self.remember(now, pending.key, bytes.clone());
+            self.remember(now, pending.key, bytes.clone(), id);
             return Ok(Reply { peer, bytes });
         }
         let msk = if granted {
@@ -701,16 +726,17 @@ impl Engine {
             if granted { vlan } else { None },
         )?;
         let peer = pending.key.peer;
-        self.remember(now, pending.key, bytes.clone());
+        self.remember(now, pending.key, bytes.clone(), id);
         Ok(Reply { peer, bytes })
     }
 
-    fn remember(&mut self, now: Instant, key: CacheKey, bytes: Vec<u8>) {
+    fn remember(&mut self, now: Instant, key: CacheKey, bytes: Vec<u8>, attempt: [u8; 16]) {
         if self.cache.len() >= self.limits.cached_replies {
             self.cache.pop_front();
         }
         self.cache.push_back(Cached {
             key,
+            attempt,
             bytes,
             expires: now + self.limits.cache_lifetime,
         });

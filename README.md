@@ -94,6 +94,11 @@ its local endpoint provides read-only status. See
 [Administration](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/5--administration.md)
 for setup, secrets, certificates, permissions, and activation diagnostics.
 
+`radius diagnostics list|show|follow|drops|status` and the GXWI Diagnostics
+section read caller-authorized eventd evidence. They show observed attempt
+timelines, exact authd operation links, collection limits and missing outcomes.
+See [Authentication Diagnostics](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/8--diagnostics.md).
+
 Schema version 2 uses GUID-backed clients, access policies, authentication
 profiles, and server identities. The prior development layout needs explicit
 conversion before activating these binaries. No permanent migration framework

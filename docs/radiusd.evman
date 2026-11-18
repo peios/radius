@@ -21,7 +21,7 @@ identifies the configuration with `object.network.id`.
 --- field source.radiusd.username
 type: str
 
-The inner PAP username supplied by the peer, before identity verification.
+The inner PAP or MSCHAPv2 username supplied before identity verification.
 
 This is unverified input, including on success. It is not a SID or proof of
 identity. It can contain a typing mistake or arbitrary peer-controlled text.
@@ -29,7 +29,7 @@ identity. It can contain a typing mistake or arbitrary peer-controlled text.
 --- field object.radiusd.canonical-name
 type: str
 
-The canonical account name returned by authd after password verification.
+The canonical account name returned after authd verified the requested credential.
 
 --- field object.radiusd.attempt.guid
 type: bin.guid
@@ -47,6 +47,433 @@ This identifies configuration, not an AP's asserted NAS identity.
 type: uint
 
 The first eight bytes of SHA-256 of the network record name, as a big-endian integer.
+
+--- field object.radiusd.progress.sequence
+type: uint
+
+The one-based milestone sequence within an attempt.
+
+Missing numbers indicate incomplete evidence. The final summary has the next sequence number, including milestones omitted by the stage bound.
+
+--- field object.radiusd.progress.result
+type: str.enum
+values: observed | offered | selected | pending | established | verified | failed | granted | refused | authentication-failed | permission-denied | missing-context | authority-unavailable | kernel-api-unavailable | access-check-error | conversation-limit | timed-out | binding-changed | protocol-error | undelivered | allowance-exhausted | accounting-unavailable | tls-failed | protocol-failed
+closed: false
+
+The stage result or final conversation outcome.
+
+A successful request or method offer does not mean admission was granted.
+
+--- field object.radiusd.progress.stage
+type: str
+
+The observed stage of the authentication conversation.
+
+Values include started, method, tls, credentials, permissions, assignment, accounting and completed.
+
+--- field object.radiusd.last-stage
+type: str
+
+The last observed stage before the conversation ended.
+
+This describes progress, not an inferred cause of missing client activity.
+
+--- field object.radiusd.method
+type: str
+
+The offered or selected EAP method.
+
+The stage distinguishes an offer from an observed client selection.
+
+--- field object.radiusd.elapsed-ms
+type: uint
+
+The elapsed monotonic time since conversation allocation, in milliseconds.
+
+--- field object.radiusd.retransmissions
+type: uint
+
+The number of exact cached-request retransmissions observed during the attempt.
+
+Terminal retransmissions after the attempt ended do not update its completed summary.
+
+--- field object.radiusd.listener
+type: str
+
+The local configured UDP socket address for the conversation.
+
+--- field object.radiusd.listener-index
+type: uint
+
+The zero-based listener index in the active configuration.
+
+This index is meaningful within that configuration, not a persistent listener identity.
+
+--- field source.radiusd.station
+type: str
+
+The normalized station MAC address asserted by the trusted client.
+
+An AP assertion is not independent proof of a device's identity.
+
+--- field object.radiusd.client.configuration-id
+type: str
+
+The client configuration record identifier selected by radiusd.
+
+Matching an address to configuration does not establish packet integrity.
+
+--- field object.radiusd.network.configuration-id
+type: str
+
+The access-policy configuration record identifier selected for the network.
+
+This is the stable configuration GUID, separate from the legacy numeric network identifier.
+
+--- field object.radiusd.authentication-profile.id
+type: str
+
+The authentication-profile configuration record identifier.
+
+--- field object.radiusd.config.fingerprint
+type: str
+
+The effective authentication configuration fingerprint observed for the stage.
+
+Display labels and diagnostic controls are excluded. Historical decisions are not recomputed using present configuration.
+
+--- field object.radiusd.config.saved-fingerprint
+type: str
+
+The saved configuration fingerprint observed for the stage.
+
+This differs from the effective authentication fingerprint and can change for display-only edits.
+
+--- field object.radiusd.assignment.rule.id
+type: str
+
+The rule configuration identifier that selected the assignment.
+
+--- field object.radiusd.assignment.profile.id
+type: str
+
+The access-profile configuration identifier selected by assignment.
+
+--- field object.radiusd.assignment.vlan
+type: uint
+
+The VLAN selected by assignment, in the range 1–4094.
+
+A later admission failure can prevent it from being sent. This does not prove an AP applied the VLAN or a device renewed its address.
+
+--- field object.radiusd.reply
+type: str
+
+The final local reply submission result.
+
+Values are accept-submitted, reject-submitted, send-failed and none. Submission does not prove delivery or connectivity.
+
+--- field object.radiusd.diagnostics.truncated
+type: bool
+
+Whether the producer omitted diagnostic stages or summary fields to satisfy its bounds.
+
+Absence does not prove complete collection.
+
+--- field object.radiusd.drops.count
+type: uint
+
+The number of discarded requests in one listener-and-reason report interval.
+
+Optional source and client fields describe one bounded sample, not every counted request.
+
+--- field object.radiusd.diagnostics.emitted
+type: uint
+
+The cumulative number of diagnostic events accepted by local event submission.
+
+This is not an acknowledgment of persistent storage or delivery to a reader.
+
+--- field object.radiusd.diagnostics.failed
+type: uint
+
+The cumulative number of diagnostic events refused by schema, size or submission checks.
+
+--- field object.radiusd.diagnostics.suppressed
+type: uint
+
+The cumulative number of diagnostic events omitted by the local emission budget.
+
+--- field object.radiusd.diagnostics.disabled
+type: uint
+
+The cumulative number of admitted diagnostic emissions omitted by event policy.
+
+Events suppressed by the budget are counted separately before event policy is checked.
+
+--- field object.radiusd.diagnostics.report-seconds
+type: uint
+
+The configured interval between diagnostic collection reports, in seconds.
+
+Counters are cumulative since daemon startup; drop counts cover the preceding report interval.
+
+--- field object.radiusd.client.name
+type: str
+
+The client display label observed when the conversation was allocated.
+
+This historical label does not select policy or establish identity.
+
+--- field object.radiusd.network.name
+type: str
+
+The access-policy display label observed when the conversation was allocated.
+
+This historical label does not select policy or establish identity.
+
+--- field object.radiusd.authentication-profile.name
+type: str
+
+The authentication-profile display label observed when the conversation was allocated.
+
+This historical label does not select policy or establish identity.
+
+--- field object.radiusd.assignment.profile.name
+type: str
+
+The access-profile display label observed during assignment evaluation.
+
+This historical label does not select policy or establish identity.
+
+--- field object.radiusd.assignment.rule.name
+type: str
+
+The winning rule display label observed during assignment evaluation.
+
+This historical label does not select policy or establish identity.
+
+--- group object.radiusd.diagnostic-context
+
+Observed authentication context, subject to diagnostic bounds and field access.
+
+field: subject.token.sid required
+field: object.radiusd.attempt.guid required
+field: object.radiusd.progress.sequence required
+field: object.radiusd.progress.stage required
+field: outcome.success required
+field: object.radiusd.progress.result required
+field: object.radiusd.client.name optional
+field: object.radiusd.network.name optional
+field: object.radiusd.authentication-profile.name optional
+field: object.radiusd.assignment.profile.name optional
+field: object.radiusd.assignment.rule.name optional
+field: outcome.reason optional
+  values: authentication-failed | permission-denied | missing-context | authority-unavailable | kernel-api-unavailable | access-check-error | conversation-limit | timed-out | binding-changed | protocol-error | undelivered | allowance-exhausted | accounting-unavailable | tls-failed | protocol-failed
+  closed: false
+field: outcome.detail optional
+field: source.address optional
+field: source.radiusd.username optional
+field: source.radiusd.station optional
+field: object.radiusd.listener optional
+field: object.radiusd.canonical-name optional
+field: object.account.sid optional
+field: object.authentication.operation.guid optional
+field: object.radiusd.client.configuration-id optional
+field: object.radiusd.network.configuration-id optional
+field: object.radiusd.authentication-profile.id optional
+field: object.radiusd.config.fingerprint optional
+field: object.radiusd.config.saved-fingerprint optional
+field: object.radiusd.method optional
+field: object.radiusd.elapsed-ms optional
+field: object.radiusd.retransmissions optional
+field: object.radiusd.assignment.rule.id optional
+field: object.radiusd.assignment.profile.id optional
+field: object.radiusd.assignment.vlan optional
+field: object.radiusd.diagnostics.truncated optional
+
+--- event radiusd.exchange.started
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+A server authentication conversation was allocated.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.method.offered
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+An EAP method was offered to the client.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.method.selected
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+A client selected an offered EAP method.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.tls.negotiated
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+TLS tunnel negotiation completed or failed.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.credential.requested
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+Credential verification was requested.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.credential.verified
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+An authd credential verification completed.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.permission.checked
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+The network Connect permission was checked.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.assignment.evaluated
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+The assignment policy was evaluated.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.accounting.requested
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+Accounting admission was requested.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.accounting.checked
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+Accounting admission completed.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.exchange.protocol.checked
+tier: standard
+gating: allocated conversations and the configured diagnostic emission bounds
+cardinality: once per distinct stage result and effective authentication configuration
+
+A protocol processing failure was observed.
+
+This is one observed action, not the final conversation outcome. A successful
+request or offer does not mean credentials were verified or access was granted.
+Milestones are best effort; the final exchange summary can survive their loss.
+
+include: object.radiusd.diagnostic-context
+
+--- event radiusd.request.discarded
+tier: standard
+gating: discarded requests grouped by listener and reason at the report interval
+cardinality: one bounded report per listener-and-reason bucket
+
+Requests were discarded without completing a server authentication attempt.
+
+Counts aggregate requests, not identities. Optional source and matched client
+fields represent a bounded recent sample. Integrity failure does not establish
+that a configured shared secret was wrong. These reports are not attempt rows.
+
+field: subject.token.sid required
+field: object.radiusd.listener-index required
+field: object.radiusd.drops.count required
+field: outcome.success required
+  Always false.
+field: outcome.reason required
+  values: unknown-client | disabled-client | malformed-request | integrity-failed | unknown-state | stale-binding | client-mismatch | network-mismatch | configuration-unavailable | missing-network | network-not-permitted | disabled-network | tls-configuration | conversation-limit | binding-mismatch | protocol-rejected
+  closed: false
+field: source.address optional
+field: object.radiusd.client.configuration-id optional
+
+--- event radiusd.diagnostics.reported
+tier: standard
+gating: the configured report interval and diagnostic emission bounds
+cardinality: once per report interval when emission is available
+
+Diagnostic collection counters were sampled.
+
+Counters accumulate since daemon startup. The sample precedes its own emission.
+Successful local submission does not prove persistent eventd storage. Reporting
+is itself best effort and does not alter authentication decisions.
+
+field: subject.token.sid required
+field: object.radiusd.diagnostics.emitted required
+field: object.radiusd.diagnostics.failed required
+field: object.radiusd.diagnostics.suppressed required
+field: object.radiusd.diagnostics.disabled required
+field: object.radiusd.diagnostics.report-seconds required
 
 --- event radiusd.exchange.attempted
 tier: standard
@@ -73,13 +500,40 @@ field: object.radiusd.attempt.guid          required
 field: object.radiusd.client.id             required
 field: object.radiusd.network.id            required
 field: object.radiusd.canonical-name        optional
-  Present only after authd verified the password, including later denials.
+  Present only after authd verified the credential, including later denials.
 field: object.account.sid                   optional
   Present together with the canonical name; the verified user's SID.
 field: outcome.success                      required
 field: outcome.reason                       when outcome.success == false
   values: authentication-failed | permission-denied | missing-context | authority-unavailable | kernel-api-unavailable | access-check-error | conversation-limit | timed-out | binding-changed | protocol-error | undelivered | allowance-exhausted | accounting-unavailable
   closed: false
+
+field: object.radiusd.progress.sequence      optional
+field: object.radiusd.progress.stage         optional
+field: object.radiusd.last-stage             optional
+field: object.radiusd.method                 optional
+field: object.radiusd.elapsed-ms             optional
+field: object.radiusd.retransmissions        optional
+field: object.authentication.operation.guid  optional
+field: object.radiusd.client.configuration-id optional
+field: object.radiusd.network.configuration-id optional
+field: object.radiusd.authentication-profile.id optional
+field: object.radiusd.config.fingerprint     optional
+field: object.radiusd.config.saved-fingerprint optional
+field: object.radiusd.assignment.rule.id     optional
+field: object.radiusd.assignment.profile.id  optional
+field: object.radiusd.assignment.vlan        optional
+field: object.radiusd.reply                  optional
+field: object.radiusd.diagnostics.truncated  optional
+field: source.address                       optional
+field: source.radiusd.station               optional
+field: object.radiusd.progress.result        optional
+field: object.radiusd.client.name optional
+field: object.radiusd.network.name optional
+field: object.radiusd.authentication-profile.name optional
+field: object.radiusd.assignment.profile.name optional
+field: object.radiusd.assignment.rule.name optional
+field: outcome.detail                       optional
 
 --- event radiusd.configuration.loaded
 tier: standard

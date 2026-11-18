@@ -128,6 +128,7 @@ pub fn prepare(stored: &Stored) -> io::Result<Config> {
         networks.insert(
             r.id.clone(),
             Network {
+                authentication_profile: Some(profile.id.clone()),
                 access: Arc::new(crate::access_policy::compile(stored, &r.id).map_err(invalid)?),
                 enabled: r.enabled() && profile.enabled(),
                 tls: Some(tls.clone()),
@@ -176,6 +177,17 @@ pub fn prepare(stored: &Stored) -> io::Result<Config> {
         .map(|(tls, _)| tls.clone())
         .unwrap_or_else(|| Arc::new(empty));
     let config = Config {
+        labels: stored
+            .objects
+            .iter()
+            .map(|record| {
+                (
+                    format!("{}/{}", record.kind.collection(), record.id),
+                    record.name().to_owned(),
+                )
+            })
+            .collect(),
+        diagnostics: crate::diagnostics::Settings::read(stored).map_err(invalid)?,
         saved_fingerprint,
         listeners,
         limits,

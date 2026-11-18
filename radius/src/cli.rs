@@ -1,10 +1,36 @@
 #[cfg(feature = "native")]
 use radius_management::model::{Kind, Values};
 use std::io;
+fn terminal_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_default().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+#[cfg(test)]
+mod diagnostic_terminal_tests {
+    #[test]
+    fn a_supplied_name_cannot_inject_terminal_controls() {
+        let rendered = super::terminal_text("Zoë\u{1b}[31m\nforged row");
+        assert!(rendered.starts_with("Zoë"));
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\n'));
+    }
+}
 pub const HELP: &str = "\
 usage: radius [--json] [command]
 
   status                         service, saved and effective configuration
+  diagnostics list|follow [--since SECONDS] [--network GUID] [--client GUID]
+    filters: --username SUPPLIED-NAME --station aa:bb:cc:dd:ee:ff
+  diagnostics show ATTEMPT-ID [--since SECONDS]
+  diagnostics drops|status [--since SECONDS]
   config show | check | init      inspect, validate, or initialize configuration
   config set NAME=VALUE ...       change global settings
   accounting init                provision the private accounting ledger directory
@@ -100,6 +126,50 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
     use serde_json::json;
     let words: Vec<_> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["diagnostics", command, rest @ ..] => {
+            use radius_management::{diagnostics::OPERATION, native::diagnostics};
+            let (filter, kind) = if *command == "show" {
+                let (id, options) = rest
+                    .split_first()
+                    .ok_or_else(|| usage("show requires an attempt identifier"))?;
+                let mut filter = diagnostic_filter(options)?;
+                filter.attempt = Some((*id).into());
+                (filter, "show")
+            } else {
+                (diagnostic_filter(rest)?, *command)
+            };
+            if !matches!(kind, "list" | "show" | "drops" | "status") {
+                return Err(usage(
+                    "expected diagnostics list, show, follow, drops or status",
+                ));
+            }
+            let view = diagnostics::read(&filter)?;
+            let result = match kind {
+                "drops" => {
+                    json!({"status":view.status,"drops":view.drops,"truncated":view.truncated})
+                }
+                "status" => {
+                    json!({"eventd_query":"available","collection":view.collection,"status":view.status,"truncated":view.truncated})
+                }
+                "show" => {
+                    let mut linked = Vec::new();
+                    let mut errors = Vec::new();
+                    for a in &view.attempts {
+                        if let Some(id) =
+                            a.summary.get(OPERATION).and_then(serde_json::Value::as_str)
+                        {
+                            match diagnostics::authority(id) {
+                                Ok(rows) => linked.extend(rows),
+                                Err(error) => errors.push(error.to_string()),
+                            }
+                        }
+                    }
+                    json!({"diagnostics":view,"authority_events":linked,"authority_errors":errors})
+                }
+                _ => serde_json::to_value(view).map_err(io::Error::other)?,
+            };
+            Ok(result)
+        }
         ["policy", "explain", selector, "--facts", path] => {
             use std::io::Read;
             let mut bytes = Vec::new();
@@ -418,6 +488,102 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
         _ => Err(usage("unknown command; run radius --help")),
     }
 }
+
+#[cfg(feature = "native")]
+pub(crate) fn diagnostic_filter(
+    args: &[&str],
+) -> io::Result<radius_management::diagnostics::Filter> {
+    use radius_management::diagnostics::Filter;
+    let mut filter = Filter::default();
+    let mut words = args.iter();
+    while let Some(flag) = words.next() {
+        let value = words
+            .next()
+            .ok_or_else(|| usage("diagnostic option needs a value"))?;
+        match *flag {
+            "--since" => {
+                filter.seconds = Some(
+                    value
+                        .parse()
+                        .map_err(|_| usage("--since requires seconds"))?,
+                )
+            }
+            "--network" => filter.network = Some((*value).into()),
+            "--client" => filter.client = Some((*value).into()),
+            "--username" => filter.username = Some((*value).into()),
+            "--station" => filter.station = Some((*value).into()),
+            _ => return Err(usage("unknown diagnostics option")),
+        }
+    }
+    Ok(filter)
+}
+
+#[cfg(feature = "native")]
+pub fn follow_diagnostics(args: &[String], json: bool) -> io::Result<()> {
+    use radius_management::native::diagnostics::Monitor;
+    use std::{collections::BTreeSet, io::Write, time::Duration};
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    let monitor = Monitor::start(diagnostic_filter(&args)?)?;
+    let mut seen = BTreeSet::new();
+    let mut status = String::new();
+    loop {
+        let view = monitor.snapshot();
+        let next = format!("{}:{}:{}", view.status, view.possible_gap, view.truncated);
+        if next != status {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({"kind":"status","message":view.status,"following":view.following,"possible_gap":view.possible_gap,"truncated":view.truncated})
+                );
+            } else {
+                println!(
+                    "{}{}{}",
+                    terminal_text(&view.status),
+                    if view.possible_gap {
+                        "; possible gap"
+                    } else {
+                        ""
+                    },
+                    if view.truncated {
+                        "; results limited"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            status = next;
+        }
+        let mut current = BTreeSet::new();
+        for attempt in view.attempts.iter().rev() {
+            for record in &attempt.stages {
+                let key = radius_management::diagnostics::record_digest(record);
+                current.insert(key);
+                if seen.contains(&key) {
+                    continue;
+                }
+                if json {
+                    println!("{}", serde_json::json!({"kind":"event","record":record}));
+                } else {
+                    let text = |key| {
+                        record
+                            .get(key)
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unavailable")
+                    };
+                    println!(
+                        "{}  {}  {}",
+                        attempt.id,
+                        terminal_text(text("object.radiusd.progress.stage")),
+                        terminal_text(text("object.radiusd.progress.result"))
+                    );
+                }
+            }
+        }
+        seen = current;
+        io::stdout().flush()?;
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
 #[cfg(not(feature = "native"))]
 pub fn run(_: &[String]) -> io::Result<serde_json::Value> {
     Err(usage("build with the native feature to administer Peios"))
@@ -478,6 +644,44 @@ fn read_secret(args: &[&str]) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
 }
 pub fn print_human(value: &serde_json::Value) {
     if value.is_null() {
+        return;
+    }
+    if let Some(attempts) = value.get("attempts").and_then(serde_json::Value::as_array) {
+        println!(
+            "{}",
+            terminal_text(value["status"].as_str().unwrap_or("Diagnostic results"))
+        );
+        if value["truncated"] == true {
+            println!("Results limited by configured bounds.");
+        }
+        if value["possible_gap"] == true {
+            println!("Collection may contain gaps.");
+        }
+        for attempt in attempts {
+            let summary = &attempt["summary"];
+            let outcome = if attempt["outcome_available"] != true {
+                "outcome unavailable"
+            } else if summary["outcome.success"] == true {
+                "Accept submitted"
+            } else {
+                summary["outcome.reason"].as_str().unwrap_or("unsuccessful")
+            };
+            println!(
+                "{}  {}  {}  {}",
+                attempt["id"].as_str().unwrap_or("unavailable"),
+                summary["object.radiusd.method"]
+                    .as_str()
+                    .unwrap_or("method unavailable"),
+                terminal_text(outcome),
+                summary["source.radiusd.username"]
+                    .as_str()
+                    .map(|s| format!("supplied username: {}", terminal_text(s)))
+                    .unwrap_or_default()
+            );
+        }
+        if attempts.is_empty() {
+            println!("No matching readable attempts in the returned window.");
+        }
         return;
     }
     if let Some(daemon) = value["daemon"].as_str() {

@@ -117,6 +117,160 @@ applies: live
 
 Configuration schema version. Older layouts require explicit conversion.
 
+--- machine\software\radius\settings diagnosticsmaxstages
+canonical: Machine\Software\Radius\Settings DiagnosticsMaxStages
+type: REG_DWORD
+default: 32
+valid: 4–256
+applies: live (new exchanges)
+
+Maximum milestone records emitted for one authentication attempt.
+
+The final summary is separate and includes a truncation marker when the stage bound omitted milestones.
+
+--- machine\software\radius\settings diagnosticsmaxeventbytes
+canonical: Machine\Software\Radius\Settings DiagnosticsMaxEventBytes
+type: REG_DWORD
+default: 8192
+valid: 1024–32768
+applies: live
+
+Maximum encoded diagnostic event payload, in bytes.
+
+Oversized summaries shed optional fields and carry a truncation marker. An event that still exceeds the bound is omitted and counted as failed.
+
+--- machine\software\radius\settings diagnosticseventspersecond
+canonical: Machine\Software\Radius\Settings DiagnosticsEventsPerSecond
+type: REG_DWORD
+default: 200
+valid: 1–100000
+applies: live
+
+Ordinary diagnostic event budget per one-second window.
+
+Milestones and drop reports share this budget. DiagnosticsSummaryReserve provides additional final-summary and collection-report capacity.
+
+--- machine\software\radius\settings diagnosticssummaryreserve
+canonical: Machine\Software\Radius\Settings DiagnosticsSummaryReserve
+type: REG_DWORD
+default: 50
+valid: 1–100000
+applies: live
+
+Additional final-summary and collection-report budget per one-second window.
+
+Reserved capacity is consumed first for summaries. They may also use the ordinary budget. Neither budget guarantees delivery under overload.
+
+--- machine\software\radius\settings diagnosticsdropsamples
+canonical: Machine\Software\Radius\Settings DiagnosticsDropSamples
+type: REG_DWORD
+default: 8
+valid: 0–1024
+applies: live
+
+Maximum source samples retained across drop buckets per report interval.
+
+Zero disables personal samples while retaining aggregate counts. A bucket carries at most one recent source and matched-client sample.
+
+--- machine\software\radius\settings diagnosticsreportseconds
+canonical: Machine\Software\Radius\Settings DiagnosticsReportSeconds
+type: REG_DWORD
+default: 5
+valid: 1–3600
+applies: live
+
+Diagnostic collection and drop report interval, in seconds.
+
+Emission is best effort. Collection counters are cumulative since startup; drop bucket counts cover the preceding interval.
+
+--- machine\software\radius\settings diagnosticslookbackseconds
+canonical: Machine\Software\Radius\Settings DiagnosticsLookbackSeconds
+type: REG_DWORD
+default: 900
+valid: 1–DiagnosticsMaxLookbackSeconds
+applies: live (new reader)
+
+Default diagnostic history lookback, in seconds.
+
+The value must not exceed DiagnosticsMaxLookbackSeconds.
+
+--- machine\software\radius\settings diagnosticsmaxlookbackseconds
+canonical: Machine\Software\Radius\Settings DiagnosticsMaxLookbackSeconds
+type: REG_DWORD
+default: 86400
+valid: 1–2592000
+applies: live (new reader)
+
+Maximum requested diagnostic history lookback, in seconds.
+
+eventd retention and authorization independently determine the available evidence.
+
+--- machine\software\radius\settings diagnosticsmaxrecords
+canonical: Machine\Software\Radius\Settings DiagnosticsMaxRecords
+type: REG_DWORD
+default: 4096
+valid: 16–65536
+applies: live (new reader)
+
+Maximum records requested per query and retained by a live reader.
+
+Reaching the bound marks the result as limited. Filters for personal and configuration fields operate on this returned record window.
+
+--- machine\software\radius\settings diagnosticsmaxattempts
+canonical: Machine\Software\Radius\Settings DiagnosticsMaxAttempts
+type: REG_DWORD
+default: 200
+valid: 1–10000
+applies: live (new reader)
+
+Maximum reconstructed attempts displayed by one reader.
+
+The retained record and payload limits apply independently.
+
+--- machine\software\radius\settings diagnosticsmaxviewbytes
+canonical: Machine\Software\Radius\Settings DiagnosticsMaxViewBytes
+type: REG_DWORD
+default: 4194304
+valid: 65536–67108864
+applies: live (new reader)
+
+Maximum retained diagnostic record payload and deduplication-key bytes.
+
+The same bound limits each encoded eventd response frame before allocation. Decoding and collection structures require additional memory.
+
+--- machine\software\radius\settings diagnosticsbackfillseconds
+canonical: Machine\Software\Radius\Settings DiagnosticsBackfillSeconds
+type: REG_DWORD
+default: 60
+valid: 1–86400
+applies: live (new reader)
+
+Minimum overlapping history requested after a stream interruption, in seconds.
+
+The actual query uses the larger of this interval and its original lookback, capped by DiagnosticsMaxLookbackSeconds. Recovered records are deduplicated; continuity is not guaranteed.
+
+--- machine\software\radius\settings diagnosticsreconnectseconds
+canonical: Machine\Software\Radius\Settings DiagnosticsReconnectSeconds
+type: REG_DWORD
+default: 3
+valid: 1–300
+applies: live (new reader)
+
+Delay before reconnecting a diagnostic stream, in seconds.
+
+Authentication does not wait for diagnostic recovery.
+
+--- machine\software\radius\settings diagnosticsstreamseconds
+canonical: Machine\Software\Radius\Settings DiagnosticsStreamSeconds
+type: REG_DWORD
+default: 60
+valid: 5–3600
+applies: live (new reader)
+
+Maximum diagnostic stream connection lifetime, in seconds.
+
+The reader renews the caller-authorized query with overlapping history. Renewal and missing evidence are shown as possible gaps.
+
 --- machine\software\radius\accessprofiles\<guid>
 canonical: Machine\Software\Radius\AccessProfiles\<guid>
 

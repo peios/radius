@@ -23,7 +23,7 @@ peinit2 = { git = "https://github.com/peios/peinit.git", rev = "46edcacf644785e9
 libc = { version = "0.2", optional = true }
 socket2 = { version = "0.6", optional = true }
 x509-parser = { version = "=0.18.1", optional = true }
-eventd-client = { git = "https://github.com/peios/eventd.git", rev = "8029c1011d7c62b86c90972999741c67eba0ad31", default-features = false, optional = true }
+eventd-client = { git = "https://github.com/peios/eventd.git", rev = "90a4b05e9325a5c552d675f4c85fad281b38fc68", default-features = false, optional = true }
 
 [[example]]
 name = "native-authority"

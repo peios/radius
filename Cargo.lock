@@ -339,7 +339,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 [[package]]
 name = "eventd-client"
 version = "0.1.11"
-source = "git+https://github.com/peios/eventd.git?rev=8029c1011d7c62b86c90972999741c67eba0ad31#8029c1011d7c62b86c90972999741c67eba0ad31"
+source = "git+https://github.com/peios/eventd.git?rev=90a4b05e9325a5c552d675f4c85fad281b38fc68#90a4b05e9325a5c552d675f4c85fad281b38fc68"
 dependencies = [
  "libc",
  "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e)",

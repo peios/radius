@@ -68,6 +68,14 @@ together;
 partial administration sets are rejected before publication. The window
 also needs a running GXWI desktop; the CLI does not.
 
+For a complete desktop, build `gxwi-server` as the static musl target
+specified by GXWI's `build.gcsl`. Its restricted token cannot open a dynamic
+loader or arbitrary shared libraries. Build the other desktop programs using
+their component recipes. Install `libgxwi.so.1` in the guest's ordinary
+library search path as well as supplying it to development services. A user
+session has no service-specific `LD_LIBRARY_PATH`; a wrapper around RADIUS
+alone does not make the taskbar and launcher load successfully.
+
 LAN development adds `bin/netd`, `bin/net`, and `lib/libnetd.so.1`, built
 with netd's raw `netd`, `net`, and `libnetd` targets. Stage all three
 together. Partial network sets are rejected before publication. Once a
@@ -118,6 +126,39 @@ A missing or damaged staged set leaves running services untouched. A
 failure after services stop remains visible and requires correction or
 activation of the previous set; activation promises no automatic rollback.
 Old sets remain available until deliberately removed while the VM is off.
+
+## Qualifying the desktop
+
+Successful sign-in and a desktop document do not establish that the shell
+and management window work. With RADIUS open on Overview, run this additional
+check from the host:
+
+```sh
+python3 radius/tools/dev-vm/check-desktop.py https://10.10.0.111:7780 \
+    --certificate-sha256 "$GXWI_CERT_SHA256" \
+    --administrator-file local/radius-administrator.json \
+    --unprivileged-file local/radius-user.json
+```
+
+Supply the actual development VM address and its certificate's SHA-256
+fingerprint, obtained from its console. Each private JSON file contains
+`username` and `password` fields. Keep these files outside the repository and
+restrict their permissions. The check pins the server certificate before
+sending credentials; it never prints passwords, session cookies, or app-origin
+secrets.
+
+The check signs in as both accounts and uses the desktop's HTTP and WebSocket
+protocols to verify a shell-owned taskbar panel, launcher overlay and declared
+RADIUS window. It reads the app's rendered Overview: the administrator must
+see Running and active saved configuration, while the non-administrator must
+be denied configuration and status access. Both accounts need permission to
+sign in through GXWI. This does not change configuration or group membership.
+It can start or rejoin those users' desktop sessions; close them through the
+ordinary desktop controls after qualification.
+
+This protocol check does not verify browser layout, input or accessibility.
+Inspect those separately in a browser. It also does not replace independent
+supplicant tests or the real AP assignment and reauthentication trial.
 
 Shut down through the matching control tool:
 

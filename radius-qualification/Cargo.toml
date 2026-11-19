@@ -1,0 +1,24 @@
+[package]
+name = "radius-qualification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "radius-qualify"
+path = "src/main.rs"
+
+[dependencies]
+radius-core = { path = "../radius-core" }
+radius-accounting = { path = "../radius-accounting" }
+radius-policy = { path = "../radius-policy" }
+radiusd = { path = "../radiusd" }
+rustls.workspace = true
+zeroize.workspace = true
+hmac.workspace = true
+md-5.workspace = true
+rcgen = { version = "=0.14.9", default-features = false, features = ["ring", "crypto"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }

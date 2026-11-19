@@ -1,0 +1,54 @@
+[package]
+name = "radius-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+radius-qualification = { path = "../radius-qualification" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 0
+incremental = false
+
+[[bin]]
+name = "packets"
+path = "fuzz_targets/packets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "engine_sequences"
+path = "fuzz_targets/engine_sequences.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "driver_sequences"
+path = "fuzz_targets/driver_sequences.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ledger_sequences"
+path = "fuzz_targets/ledger_sequences.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_sequences"
+path = "fuzz_targets/control_sequences.rs"
+test = false
+doc = false
+bench = false

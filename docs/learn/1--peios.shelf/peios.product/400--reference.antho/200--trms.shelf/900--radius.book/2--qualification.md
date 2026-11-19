@@ -87,6 +87,13 @@ lpsd before switching to the new runtime. Set
 `RADIUS_QUALIFY_LEGACY_STORE=1` only for that arrangement. Fresh-store checks
 do not exercise the old-store upgrade.
 
+## Component load and recovery
+
+The developer-only qualification program measures bounded synthetic loads,
+checks overload recovery, and injects storage failures in child processes.
+See [Component Load and Recovery](~peios/reference/radius/component-load-and-recovery)
+for commands, measurements, and the incomplete instrumented fuzzing gate.
+
 ## Limits of the evidence
 
 Passing this gate establishes host-side protocol behavior for the tested

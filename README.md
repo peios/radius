@@ -86,6 +86,15 @@ also includes the window. The `accounting` target exercises the ledger with
 bundled SQLite, while `native_management` covers its native adapters. The
 `policy` target covers the shared PNP adapter.
 
+The developer-only `radius-qualify` program measures synthetic TLS admission
+and durable accounting loads and checks storage failure recovery. It opens
+no external sockets and uses no native authority. Build it with
+`pekit build --strict -j 2 qualify`; run its regressions with
+`pekit test --strict -j 2 qualification`. See
+[Component Load and Recovery](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/10--component-load-and-recovery.md)
+for commands, observed measurements, and their limits. The optional `fuzz/`
+scaffolding has not completed an instrumented campaign.
+
 Cargo and Pekit select matching immutable SDK, authentication and GXWI inputs.
 Unpublished dependency commits must already be available in the local build
 cache until they are published. Do not bypass a Pekit pin mismatch or select

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius", "radius-accounting", "radius-policy"]
-exclude = ["vendor/kernel/peios/rust/pnp-core", "vendor/kernel/peios/rust/peios-uapi"]
+members = ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius", "radius-accounting", "radius-policy", "radius-qualification"]
+exclude = ["vendor/kernel/peios/rust/pnp-core", "vendor/kernel/peios/rust/peios-uapi", "fuzz"]
 
 [workspace.package]
 version = "0.1.0"

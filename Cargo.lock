@@ -1084,6 +1084,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "radius-qualification"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "md-5",
+ "radius-accounting",
+ "radius-core",
+ "radius-policy",
+ "radiusd",
+ "rcgen",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
 name = "radiusd"
 version = "0.1.0"
 dependencies = [

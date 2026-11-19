@@ -49,6 +49,9 @@ def dependencies() -> rust.Vendored {
 
 def build test_server() { = rust.bin(crates(), "radius-fixture", name = "radius-test-server") }
 
+# Synthetic, bounded component qualification; no native authority or transport.
+def build qualify() { = rust.bin(crates(), "radius-qualification", name = "radius-qualify") }
+
 def native_crates(window: Bool = false) -> rust.RustWorkspace {
     let gui: List<rust.CrateSettings> = if window { gxwi.crate_settings() } else { [] }
     = rust.workspace(

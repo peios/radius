@@ -23,6 +23,10 @@ def test policy(tests: List<rust.RustTest> = rust.tests(crates(), "radius-policy
     let each = for test in tests { = rust.run_test(test) }
 }
 
+def test qualification(tests: List<rust.RustTest> = rust.tests(crates(), "radius-qualification")) {
+    let each = for test in tests { = rust.run_test(test) }
+}
+
 def test native_management(
     tests: List<rust.RustTest> = rust.tests(native_crates(), "radius-management", features = ["native"]),
     given: List<{at: String, place: Dir | File}> = [...peios_rs.runtime(), {at = "/opt/peios/lib/libauth.so.1"; place = build libauth()}],
@@ -53,7 +57,7 @@ def test native(
     }
 }
 
-def test clippy(checked: List<List<{}>> = for each in ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius", "radius-accounting", "radius-policy"] {
+def test clippy(checked: List<List<{}>> = for each in ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius", "radius-accounting", "radius-policy", "radius-qualification"] {
     = rust.clippy(crates(), each, flags = ["-Dwarnings"])
 }) {}
 

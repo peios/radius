@@ -65,8 +65,8 @@ Every request carries Message-Authenticator and Event-Timestamp. Profiles
 default to `"proxy_state_nonce": true`, adding an opaque Proxy-State nonce.
 Set it to false only for a NAS that rejects that attribute; durable request
 allocation still applies. Responses must match the packet family, identifier,
-peer, and request
-authenticator. Requiring a response Message-Authenticator is configurable for
+peer, and request authenticator. Requiring a response Message-Authenticator
+is configurable for
 NAS compatibility. Do not advertise a device-specific recipe as qualified
 until it has produced a fresh authentication exchange on that device.
 
@@ -85,14 +85,36 @@ rollback leaves requests pending, with a waiting reason, until a valid pair
 is available. Other NAS addresses have independent reuse windows. The global
 pair allocator permits up to 256 new requests per second across all NAS
 addresses, preventing reuse when a destination or shared secret changes.
-No timestamp
-is moved into the future to work around exhaustion. This follows the
-identifier and replay constraints in [RFC 5176](https://datatracker.ietf.org/doc/html/rfc5176#section-6.3).
+No timestamp is moved into the future to work around exhaustion. This follows
+the identifier and replay constraints in [RFC 5176](https://datatracker.ietf.org/doc/html/rfc5176#section-6.3).
 
 The allocator is retained in ledger format 3 and seeded from stored packets
 when upgrading formats 1 or 2. Take a full offline state backup before the
 upgrade; earlier daemons cannot open the upgraded ledger. Ordinary evidence
 rebuild and retention do not erase the allocator.
+
+For a NAS that rejects Proxy-State, a Disconnect-only compatibility profile
+can retain all recorded NAS selectors and require the recorded station:
+
+```json
+{
+  "version": 1,
+  "name": "Disconnect without Proxy-State",
+  "proxy_state_nonce": false,
+  "station_selector": true,
+  "require_station": true,
+  "recipes": [
+    {"action": "disconnect", "fresh_proof": false, "attributes": []}
+  ]
+}
+```
+
+On the development UniFi AP, the generic request received an authenticated
+NAK with Error-Cause 401. Omitting only Proxy-State produced an authenticated
+ACK, an accounting Stop and a new session with fresh password proof. This
+also worked automatically when changing the assignment to VLAN 20 and back
+to no override. This qualifies Disconnect on that tested device; it does not
+establish CoA update, other firmware behavior or a DHCP address change.
 
 ## Automatic behavior
 
@@ -203,7 +225,8 @@ Ledger schema 2 adds control state while preserving usage, observations,
 corrections, and command history. Older sessions keep unknown baselines until
 fresh authentication. Rebuild preserves outage timers and command history and
 does not resend commands as a side effect. Stable reevaluations do not fsync a
-heartbeat on every scan.
+heartbeat on every scan. Schema 3 adds the durable wire allocator described
+above, preserving that control state.
 
 The matching lpsd uses store format 7 and persists credential bindings before
 exposing an upgraded store. Preserve offline copies of both stores, their

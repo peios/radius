@@ -1,5 +1,5 @@
 //! Declarative dynamic authorization and durable evidence, never AP identity.
-use crate::{Error, Result, model::Session, wire::Attribute};
+use crate::{model::Session, wire::Attribute, Error, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,10 +235,37 @@ pub struct Profile {
     pub station_selector: bool,
     #[serde(default)]
     pub require_station: bool,
+    /// Which recorded NAS selectors to transmit. At least one must be present
+    /// on the exact target; the session selector is never optional.
+    #[serde(default = "all_nas_selectors")]
+    pub nas_selectors: Vec<NasSelector>,
     /// Clearing a VLAN override has no universal standard CoA encoding.
     #[serde(default)]
     pub clear_vlan: Vec<Encoding>,
     pub recipes: Vec<Recipe>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NasSelector {
+    IpAddress,
+    Identifier,
+    Ipv6Address,
+}
+impl NasSelector {
+    fn kind(self) -> u8 {
+        match self {
+            Self::IpAddress => 4,
+            Self::Identifier => 32,
+            Self::Ipv6Address => 95,
+        }
+    }
+}
+fn all_nas_selectors() -> Vec<NasSelector> {
+    vec![
+        NasSelector::IpAddress,
+        NasSelector::Identifier,
+        NasSelector::Ipv6Address,
+    ]
 }
 fn yes() -> bool {
     true
@@ -250,6 +277,7 @@ impl Default for Profile {
             name: "RFC 5176".into(),
             station_selector: true,
             require_station: false,
+            nas_selectors: all_nas_selectors(),
             clear_vlan: vec![],
             recipes: vec![
                 Recipe {
@@ -304,6 +332,13 @@ impl Profile {
             || self.recipes.len() > 3
             || self.clear_vlan.len() > 16
             || (self.require_station && !self.station_selector)
+            || self.nas_selectors.is_empty()
+            || self.nas_selectors.len() > 3
+            || self
+                .nas_selectors
+                .iter()
+                .enumerate()
+                .any(|(i, selector)| self.nas_selectors[..i].contains(selector))
         {
             return Err(Error::Configuration(
                 "invalid dynamic profile bounds".into(),
@@ -394,6 +429,14 @@ impl Profile {
             ));
         }
         let mut attrs = target.attributes(self.station_selector)?;
+        attrs.retain(|a| {
+            !matches!(a.kind, 4 | 32 | 95) || self.nas_selectors.iter().any(|s| s.kind() == a.kind)
+        });
+        if !attrs.iter().any(|a| matches!(a.kind, 4 | 32 | 95)) {
+            return Err(Error::Configuration(
+                "profile has no recorded NAS selector".into(),
+            ));
+        }
         if action != Action::Disconnect {
             let desired = desired.ok_or(Error::Malformed)?;
             desired.validate()?;

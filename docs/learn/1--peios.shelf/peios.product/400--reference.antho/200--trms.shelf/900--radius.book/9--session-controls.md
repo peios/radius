@@ -46,6 +46,14 @@ selectors, or replace integrity, authorization, retries and replay handling.
 NAS and Acct-Session-Id selectors remain mandatory. See the source definition
 in `radius-accounting/src/dynamic.rs` for the complete validated schema.
 
+`nas_selectors` chooses which recorded NAS attributes the profile transmits:
+`ip-address`, `identifier`, and `ipv6-address`. Omitting it retains all
+recorded NAS attributes. The list must be nonempty and contain no duplicates;
+at least one selected attribute must exist on the recorded occurrence, or the
+request is refused. For example, `"nas_selectors": ["identifier"]` uses only
+the recorded NAS-Identifier. This changes the wire recipe, not the immutable
+session target or destination. Acct-Session-Id and integrity remain mandatory.
+
 The generic profile supports Disconnect and standard VLAN/Session-Timeout
 updates. It does not claim fresh reauthentication. Clearing a VLAN override
 has no universal CoA encoding; it needs an explicit device reset recipe or an

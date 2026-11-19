@@ -116,6 +116,14 @@ also worked automatically when changing the assignment to VLAN 20 and back
 to no override. This qualifies Disconnect on that tested device; it does not
 establish CoA update, other firmware behavior or a DHCP address change.
 
+In the observed iPhone trial, the address eventually changed to the VLAN 20
+subnet after Disconnect and fresh authentication. On the return to no
+override, the phone still displayed its old address after five minutes.
+Explicitly assigning the main VLAN also failed to produce a new address and
+connectivity was lost. Automatic DHCP renewal on VLAN changes is therefore
+not qualified by this test. A successful Disconnect and new password proof
+do not establish that the client has usable IP configuration.
+
 ## Automatic behavior
 
 With accounting enabled, automatic session controls default on. The defaults

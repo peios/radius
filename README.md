@@ -2,7 +2,8 @@
 
 `radius` is the Peios RADIUS repository. It contains the portable `radius-core`
 library, the native Peios `radiusd` daemon, the shared `radius-management`
-library, the `radius-policy` PNP adapter, the `radius-accounting` ledger,
+library, the `radius-policy` PNP adapter, the `radius-authorization` settings
+and equipment encoders, the `radius-accounting` ledger,
 the CLI/GXWI `radius` program, and a
 separate loopback-only `radius-test-server` qualification fixture.
 
@@ -59,6 +60,12 @@ interface entry points and introduces no syscall requirement.
 See [Access Assignment](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/7--access-assignment.md)
 for explicit default rules, VLAN configuration, typed claims and Explain.
 
+See [Access Profile Settings](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/11--access-profile-settings.md)
+for connection, bandwidth, traffic, gateway and management settings, equipment
+mappings, exact encodings and enforcement qualification limits. Generate the
+Registry reference entries from the shared metadata with
+`cargo run -p radius-authorization --example reference -- regman`.
+
 See [Session Controls](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/9--session-controls.md)
 for exact-session Disconnect and CoA, device profiles, automatic reevaluation,
 independent permissions, evidence and coordinated store migration.
@@ -73,7 +80,7 @@ You can instead supply an existing qualified `eapol_test` executable.
 Direct component targets, without any packaging:
 
 ```sh
-pekit test --strict -j 2 unit integration management policy accounting clippy doctests
+pekit test --strict -j 2 unit integration management policy authorization accounting clippy doctests
 pekit build --strict -j 2 test_server radiusd radius_cli radius
 pekit test --strict -j 2 native native_management administration native_clippy native_management_clippy administration_clippy
 ```

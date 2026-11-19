@@ -1,6 +1,6 @@
 //! Stored configuration, including incomplete records that need repairing.
 use ring::{
-    digest::{SHA256, digest},
+    digest::{digest, SHA256},
     rand::{SecureRandom, SystemRandom},
 };
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,7 @@ impl Kind {
                 ("Disconnect", Number),
             ],
             Self::AccountingProfile | Self::DynamicProfile => &[("Definition", Text)],
-            Self::AccessProfile => &[("VlanId", Number)],
+            Self::AccessProfile => access_profile_fields(),
             Self::Rule => &[
                 ("Policy", Text),
                 ("Parent", Text),
@@ -131,6 +131,9 @@ impl Kind {
         }
     }
     pub fn optional(self, name: &str) -> bool {
+        if self == Self::AccessProfile {
+            return name != "Name" && name != "Enabled" && self.field(name).is_some();
+        }
         matches!(
             (self, name),
             (Self::AccessProfile, "VlanId")
@@ -156,6 +159,31 @@ pub enum Field {
     List,
     Number,
     Descriptor,
+}
+
+fn access_profile_fields() -> &'static [(&'static str, Field)] {
+    static FIELDS: std::sync::OnceLock<Vec<(&'static str, Field)>> = std::sync::OnceLock::new();
+    FIELDS.get_or_init(|| {
+        let mut fields = vec![("VlanId", Field::Number)];
+        for field in radius_authorization::FIELDS {
+            let kind = match field.kind {
+                radius_authorization::Kind::Number
+                    if field.name.ends_with("BitsPerSecond")
+                        || field.name.ends_with("BurstBytes") =>
+                {
+                    Field::Text
+                }
+                radius_authorization::Kind::Number | radius_authorization::Kind::Boolean => {
+                    Field::Number
+                }
+                radius_authorization::Kind::List => Field::List,
+                radius_authorization::Kind::Text => Field::Text,
+            };
+            fields.push((field.name, kind));
+        }
+        fields.push(("Extensions", Field::Text));
+        fields
+    })
 }
 
 /// Registry values are preserved even when a known field has the wrong type.
@@ -205,6 +233,15 @@ impl Record {
             record
                 .values
                 .insert("Actions".into(), Value::List(vec!["NULL".into()]));
+        }
+        if kind == Kind::DynamicProfile {
+            record.values.insert(
+                "Definition".into(),
+                Value::Text(
+                    serde_json::to_string_pretty(&radius_accounting::dynamic::Profile::default())
+                        .map_err(|e| e.to_string())?,
+                ),
+            );
         }
         Ok(record)
     }

@@ -1,6 +1,6 @@
 //! Nonblocking integration coordinator. Backend operations and supplied-subject
 //! decisions are adapter-owned; no username lookup reconstructs an identity.
-use crate::config::{Config, Network, called_ssid};
+use crate::config::{called_ssid, Config, Network};
 use radius_core::{Admission, Binding, Client, Engine, Outcome, Reply, Verification};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 
@@ -49,6 +49,8 @@ pub enum Progress<S> {
 }
 pub struct AdmissionContext<'a> {
     pub vlan: Option<u16>,
+    pub authorization: &'a radius_authorization::Compiled,
+    pub configured_timeout_seconds: u32,
     pub id: [u8; 16],
     pub client_id: &'a str,
     pub network_id: &'a str,
@@ -579,6 +581,8 @@ impl<B: Backend> Driver<B> {
             };
             let mut extras = AdmissionExtras::default();
             let mut vlan = None;
+            let mut authorization = radius_authorization::Compiled::default();
+            let mut configured_timeout_seconds = network.reauthenticate_seconds;
             attempt.trace.set(
                 "object.radiusd.config.fingerprint",
                 radius_management::diagnostics::hex(&self.config.fingerprint),
@@ -608,6 +612,7 @@ impl<B: Backend> Driver<B> {
                     "object.radiusd.assignment.profile.name",
                     "object.radiusd.assignment.rule.name",
                     "object.radiusd.assignment.vlan",
+                    "object.radiusd.assignment.fingerprint",
                 ] {
                     attempt.trace.fields.remove(key);
                 }
@@ -653,6 +658,36 @@ impl<B: Backend> Driver<B> {
                     });
                 match assignment {
                     Ok((value, rule)) => {
+                        match value.settings.compile(value.vlan, &client.authorization) {
+                            Ok(compiled) => {
+                                configured_timeout_seconds =
+                                    value.settings.timer(network.reauthenticate_seconds).0;
+                                authorization = compiled;
+                            }
+                            Err(issue) => {
+                                attempt.trace.set(
+                                    "outcome.detail",
+                                    issue.chars().take(256).collect::<String>(),
+                                );
+                                attempt.trace.set("outcome.reason", Reason::Policy.name());
+                                output.policy_issue(&id, &issue);
+                                reason = Reason::Policy;
+                            }
+                        }
+                        if reason == Reason::Granted {
+                            let material = serde_json::to_value((value.vlan, &authorization))
+                                .expect("validated authorization serializes");
+                            let record = radius_management::diagnostics::Record::from([(
+                                "authorization".into(),
+                                material,
+                            )]);
+                            attempt.trace.set(
+                                "object.radiusd.assignment.fingerprint",
+                                radius_management::diagnostics::hex(
+                                    &radius_management::diagnostics::record_digest(&record),
+                                ),
+                            );
+                        }
                         vlan = value.vlan;
                         if let Some(label) = self
                             .config
@@ -679,7 +714,15 @@ impl<B: Backend> Driver<B> {
                                 .trace
                                 .set("object.radiusd.assignment.vlan", u64::from(vlan));
                         }
-                        attempt.trace.stage("assignment", "granted", output);
+                        attempt.trace.stage(
+                            "assignment",
+                            if reason == Reason::Granted {
+                                "granted"
+                            } else {
+                                "refused"
+                            },
+                            output,
+                        );
                     }
                     Err(error) => {
                         reason = error;
@@ -694,6 +737,8 @@ impl<B: Backend> Driver<B> {
                     result.as_ref().unwrap(),
                     AdmissionContext {
                         vlan,
+                        authorization: &authorization,
+                        configured_timeout_seconds,
                         id,
                         client_id: &client.name,
                         network_id,
@@ -725,7 +770,7 @@ impl<B: Backend> Driver<B> {
                     self.config.fingerprint[..8].try_into().unwrap(),
                 ),
             };
-            let reply = self.engine.finish_with_policy(
+            let reply = self.engine.finish_with_authorization(
                 now,
                 id,
                 context,
@@ -739,8 +784,8 @@ impl<B: Backend> Driver<B> {
                 Some(
                     extras
                         .timeout_seconds
-                        .map_or(network.reauthenticate_seconds, |v| {
-                            v.min(network.reauthenticate_seconds)
+                        .map_or(configured_timeout_seconds, |v| {
+                            v.min(configured_timeout_seconds)
                         }),
                 ),
                 result
@@ -749,6 +794,7 @@ impl<B: Backend> Driver<B> {
                     .and_then(|subject| self.backend.mschapv2_success(subject)),
                 extras.class.as_deref(),
                 vlan,
+                Some(&authorization),
             );
             if self.engine.has_attempt(&id) {
                 if let Ok(reply) = reply {

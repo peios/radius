@@ -172,6 +172,8 @@ pub struct Profile {
     pub name: String,
     pub enabled: bool,
     pub vlan: Option<u16>,
+    #[serde(default)]
+    pub settings: radius_authorization::Settings,
 }
 impl Profile {
     pub fn validate(&self) -> Result<(), String> {
@@ -185,6 +187,7 @@ impl Profile {
         if self.vlan.is_some_and(|v| !(1..=4094).contains(&v)) {
             return Err("VLAN must be 1 through 4094, or unset".into());
         }
+        self.settings.validate()?;
         Ok(())
     }
 }
@@ -560,6 +563,7 @@ impl Policy {
                     assignment = Some(Assignment {
                         profile: p.id.clone(),
                         vlan: p.vlan,
+                        settings: p.settings.clone(),
                     });
                 } else {
                     outcome = "profile-disabled";
@@ -808,6 +812,8 @@ pub fn validate_facts(facts: &Facts) -> Result<(), String> {
 pub struct Assignment {
     pub profile: String,
     pub vlan: Option<u16>,
+    #[serde(default)]
+    pub settings: radius_authorization::Settings,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConditionTrace {

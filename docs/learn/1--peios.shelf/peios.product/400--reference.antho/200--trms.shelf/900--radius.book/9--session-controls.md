@@ -39,6 +39,11 @@ record lives under `DynamicAuthorizationProfiles` and contains `Name`,
 GXWI calls these Session Control Profiles. A missing reference uses the
 generic RFC 5176 profile.
 
+The same definition's `authorization` member supplies admission mappings,
+qualified live settings and explicit reset attributes for richer profiles.
+See [Access Profile Settings](~peios/reference/radius/access-profile-settings).
+The WISPr template provides rate encodings without claiming live support.
+
 Profiles declare bounded recipes for `disconnect`, `reauthenticate` and
 `update-authorization`, optional station targeting, standard attributes and
 vendor-specific encodings. They cannot run code, insert usernames as
@@ -88,7 +93,7 @@ addresses, preventing reuse when a destination or shared secret changes.
 No timestamp is moved into the future to work around exhaustion. This follows
 the identifier and replay constraints in [RFC 5176](https://datatracker.ietf.org/doc/html/rfc5176#section-6.3).
 
-The allocator is retained in ledger format 3 and seeded from stored packets
+The allocator is retained in ledger format 4 and seeded from stored packets
 when upgrading formats 1 or 2. Take a full offline state backup before the
 upgrade; earlier daemons cannot open the upgraded ledger. Ordinary evidence
 rebuild and retention do not erase the allocator.
@@ -237,6 +242,12 @@ fresh authentication. Rebuild preserves outage timers and command history and
 does not resend commands as a side effect. Stable reevaluations do not fsync a
 heartbeat on every scan. Schema 3 adds the durable wire allocator described
 above, preserving that control state.
+
+Schema 4 retains complete logical authorization, per-setting encodings, timer
+caps and command baselines. It accepts schema 1–3 records without inventing
+missing legacy attributes. An acknowledged update becomes the comparison
+baseline for subsequent changes, including a return to the originally issued
+profile. Quota countdowns do not change the configured policy identity.
 
 The matching lpsd uses store format 7 and persists credential bindings before
 exposing an upgraded store. Preserve offline copies of both stores, their

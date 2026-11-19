@@ -42,6 +42,11 @@ ledger. A separate file lock prevents two owners. Stop radiusd before copying
 the database, WAL, and shared-memory files as a consistent backup set.
 Rebuild reinterprets retained evidence; it cannot recover deleted evidence.
 
+Ledger format 4 retains complete issued and requested access settings and
+their exact equipment encodings. Formats 1–3 upgrade in place. Existing
+evidence and unknown legacy fields are preserved. Earlier binaries refuse
+format 4; keep a stopped full-state backup and prior runtime for rollback.
+
 ## Session interpretation
 
 Start, Interim-Update, and Stop form ordinary sessions. Accounting-On and

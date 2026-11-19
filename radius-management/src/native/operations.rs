@@ -1,6 +1,6 @@
 //! Shared edits used by both frontends. Registry checks the actual caller.
 use super::{credentials, registry};
-use crate::model::{Field, Kind, ROOT, Record, SCHEMA, Stored, Value, Values};
+use crate::model::{Field, Kind, Record, Stored, Value, Values, ROOT, SCHEMA};
 use peios::registry::{CreateFlags, Data, Key, KeyAccess, OpenFlags, Transaction};
 use std::io;
 
@@ -93,6 +93,13 @@ pub fn parse_field(kind: Kind, name: &str, value: &str) -> io::Result<Value> {
         io::Error::new(io::ErrorKind::InvalidInput, format!("unknown field {name}"))
     })? {
         Field::Text | Field::Descriptor => Ok(Value::Text(value.into())),
+        Field::List if kind == Kind::AccessProfile && value.starts_with('[') => {
+            serde_json::from_str::<Vec<String>>(value)
+                .map(Value::List)
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "expected a JSON string list")
+                })
+        }
         Field::List => Ok(Value::List(value.split(',').map(str::to_owned).collect())),
         Field::Number => value.parse().map(Value::Number).map_err(|_| {
             io::Error::new(
@@ -295,9 +302,37 @@ pub fn explain(selector: &str, facts: &radius_policy::Facts) -> io::Result<serde
         .map_err(io::Error::other)?;
     let compiled = crate::access_policy::compile(&stored, &policy.id).map_err(io::Error::other)?;
     let explanation = compiled.explain(facts).map_err(io::Error::other)?;
+    let client = facts.get("Client.Id").and_then(|v| match v.as_slice() {
+        [radius_policy::Scalar::String(id)] => Some(id.as_str()),
+        _ => None,
+    });
+    let authorization_plan = if let Some(assignment) = &explanation.assignment {
+        if let Some(client) = client {
+            if stored.get(Kind::Client, client).is_none() {
+                serde_json::json!({"state":"unknown-client"})
+            } else {
+                let mappings = crate::dynamic::prepare(&stored)
+                    .map_err(io::Error::other)?
+                    .profile(client)
+                    .authorization;
+                match assignment.settings.compile(assignment.vlan, &mappings) {
+                    Ok(value) => {
+                        serde_json::json!({"state":"encoded","enforcement_verified":false,"reply":value,"timer":assignment.settings.timer(policy.number("ReauthenticateSeconds").unwrap_or(3600))})
+                    }
+                    Err(error) => {
+                        serde_json::json!({"state":"unsupported-or-invalid","error":error})
+                    }
+                }
+            }
+        } else {
+            serde_json::json!({"state":"client-not-specified"})
+        }
+    } else {
+        serde_json::json!({"state":"no-assignment"})
+    };
     Ok(
         serde_json::json!({"configuration":"saved","fingerprint":stored.fingerprint(),"policy":policy.id,
-        "full_admission_checked":false,"explanation":explanation}),
+        "full_admission_checked":false,"explanation":explanation,"authorization_plan":authorization_plan}),
     )
 }
 /// Create with generated shared-secret material unless an existing protected
@@ -374,4 +409,27 @@ pub fn configuration_check(stored: &Stored) -> Vec<crate::model::Issue> {
         }
     }
     issues
+}
+
+#[cfg(test)]
+mod access_profile_input_tests {
+    use super::*;
+    #[test]
+    fn json_lists_preserve_commas_in_filter_rules() {
+        let rule = "permit in 6 from any to assigned 80,443";
+        assert_eq!(
+            parse_field(
+                Kind::AccessProfile,
+                "FilterRules",
+                &serde_json::to_string(&[rule]).unwrap()
+            )
+            .unwrap(),
+            Value::List(vec![rule.into()])
+        );
+        assert!(parse_field(Kind::AccessProfile, "FilterRules", "[5]").is_err());
+        assert_eq!(
+            parse_field(Kind::AccessProfile, "FilterIds", "guest,limited").unwrap(),
+            Value::List(vec!["guest".into(), "limited".into()])
+        );
+    }
 }

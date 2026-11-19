@@ -444,6 +444,7 @@ version = "0.1.0"
 dependencies = [
  "hmac",
  "md-5",
+ "radius-authorization",
  "ring",
  "rusqlite",
  "serde",
@@ -453,11 +454,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "radius-authorization"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "radius-core"
 version = "0.1.0"
 dependencies = [
  "hmac",
  "md-5",
+ "radius-authorization",
  "ring",
  "rustls",
  "subtle",
@@ -477,6 +487,7 @@ name = "radius-management"
 version = "0.1.0"
 dependencies = [
  "radius-accounting",
+ "radius-authorization",
  "radius-core",
  "radius-policy",
  "ring",
@@ -491,6 +502,7 @@ name = "radius-policy"
 version = "0.1.0"
 dependencies = [
  "pnp-core",
+ "radius-authorization",
  "serde",
  "serde_json",
 ]
@@ -518,6 +530,7 @@ name = "radiusd"
 version = "0.1.0"
 dependencies = [
  "radius-accounting",
+ "radius-authorization",
  "radius-core",
  "radius-management",
  "radius-policy",

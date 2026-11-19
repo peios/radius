@@ -1,10 +1,11 @@
 //! Read eventd as the real caller; never proxy a privileged RADIUS snapshot.
 use crate::diagnostics::{
-    self as model, ATTEMPT, Filter, OPERATION, Projection, Record, Settings, View,
+    self as model, Filter, Projection, Record, Settings, View, ATTEMPT, OPERATION,
 };
 use eventd_client::{
-    Value, text,
+    text,
     wire::{Connection, Response},
+    Value,
 };
 use peios::registry::{Data, Key, KeyAccess, OpenFlags};
 use std::{
@@ -13,8 +14,8 @@ use std::{
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -60,6 +61,7 @@ const FIELDS: &[&str] = &[
     "object.radiusd.config.saved-fingerprint",
     "object.radiusd.assignment.rule.id",
     "object.radiusd.assignment.profile.id",
+    "object.radiusd.assignment.fingerprint",
     "object.radiusd.assignment.vlan",
     "outcome.detail",
     "object.radiusd.reply",
@@ -627,15 +629,13 @@ mod tests {
         stream
             .consume(Response::Records(vec![evidence(1, Some("jack"))]), &state)
             .unwrap();
-        assert!(
-            state
-                .lock()
-                .unwrap()
-                .projection
-                .view(false, "")
-                .attempts
-                .is_empty()
-        );
+        assert!(state
+            .lock()
+            .unwrap()
+            .projection
+            .view(false, "")
+            .attempts
+            .is_empty());
         stream.consume(Response::Watch, &state).unwrap();
         stream
             .consume(Response::Records(vec![evidence(1, Some("jack"))]), &state)
@@ -655,13 +655,12 @@ mod tests {
                 &state,
             )
             .unwrap();
-        assert!(
-            failed
-                .consume(Response::Error("not authorized".into()), &state)
-                .is_err()
-        );
+        assert!(failed
+            .consume(Response::Error("not authorized".into()), &state)
+            .is_err());
         assert_eq!(
-            state.lock().unwrap().projection.view(false, "").attempts[0].summary["source.radiusd.username"],
+            state.lock().unwrap().projection.view(false, "").attempts[0].summary
+                ["source.radiusd.username"],
             "jack"
         );
 
@@ -671,11 +670,9 @@ mod tests {
             .unwrap();
         reconnect.consume(Response::Watch, &state).unwrap();
         let view = state.lock().unwrap().projection.view(true, "");
-        assert!(
-            !view.attempts[0]
-                .summary
-                .contains_key("source.radiusd.username")
-        );
+        assert!(!view.attempts[0]
+            .summary
+            .contains_key("source.radiusd.username"));
         assert!(view.possible_gap);
         assert!(!view.attempts[0].outcome_available);
         assert!(reconnect.consume(Response::Watch, &state).is_err());

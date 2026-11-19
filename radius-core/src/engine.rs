@@ -666,6 +666,37 @@ impl Engine {
         class: Option<&[u8]>,
         vlan: Option<u16>,
     ) -> Result<Reply, Error> {
+        self.finish_with_authorization(
+            now,
+            id,
+            current,
+            admission,
+            reauthenticate_seconds,
+            mschapv2_success,
+            class,
+            vlan,
+            None,
+        )
+    }
+
+    /// The complete authorization is validated before admission finishes, and
+    /// appears only in the final integrity-protected Access-Accept.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_with_authorization(
+        &mut self,
+        now: Instant,
+        id: [u8; 16],
+        current: Client<'_>,
+        admission: Admission,
+        reauthenticate_seconds: Option<u32>,
+        mschapv2_success: Option<[u8; 20]>,
+        class: Option<&[u8]>,
+        vlan: Option<u16>,
+        authorization: Option<&radius_authorization::Compiled>,
+    ) -> Result<Reply, Error> {
+        if let Some(value) = authorization {
+            value.validate().map_err(|_| Error::Configuration)?;
+        }
         if vlan.is_some_and(|v| !(1..=4094).contains(&v)) {
             return Err(Error::Configuration);
         }
@@ -709,7 +740,7 @@ impl Engine {
         } else {
             None
         };
-        let bytes = wire::response_with_policy(
+        let bytes = wire::response_with_authorization(
             pending.radius_id,
             &pending.request_auth,
             &pending.secret,
@@ -724,6 +755,7 @@ impl Engine {
             },
             if granted { class } else { None },
             if granted { vlan } else { None },
+            if granted { authorization } else { None },
         )?;
         let peer = pending.key.peer;
         self.remember(now, pending.key, bytes.clone(), id);

@@ -102,7 +102,7 @@ These rejection counts depend on the synthetic arrival pattern and timing.
 
 The storage fixture checks 20 cases: eight write-error points, two sync-error
 points, eight full-storage points, termination during a sync, and termination
-after commit before acknowledgement. It checks atomic retention, idempotent
+after commit before acknowledgment. It checks atomic retention, idempotent
 retry, SQLite integrity, and foreign-key integrity after reopening. Faults
 are installed only inside dedicated developer child processes. A fault
 family must reach an injection point for its run to pass.

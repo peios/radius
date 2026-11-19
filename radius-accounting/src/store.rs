@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-const SCHEMA: i64 = 3;
+const SCHEMA: i64 = 4;
 const APPLICATION: i64 = 0x52414441;
 type PriorReceipt = (String, Option<String>, String, i64, Vec<u8>);
 
@@ -48,6 +48,8 @@ pub struct CommandStep {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Command {
+    #[serde(default)]
+    pub previous: Option<crate::dynamic::Authorization>,
     #[serde(default)]
     pub intent_key: String,
     #[serde(default)]
@@ -181,7 +183,7 @@ impl Store {
         let version: i64 = self
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if (app != 0 && app != APPLICATION) || !matches!(version, 0 | 1 | 2 | SCHEMA) {
+        if (app != 0 && app != APPLICATION) || !matches!(version, 0 | 1 | 2 | 3 | SCHEMA) {
             return Err(Error::Configuration(
                 "foreign or unsupported ledger schema".into(),
             ));
@@ -256,6 +258,7 @@ impl Store {
         tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS one_pending_control ON commands(session) WHERE state IN ('pending','sent');")?;
         tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS control_request ON commands(json_extract(CAST(data AS TEXT),'$.actor'),json_extract(CAST(data AS TEXT),'$.request_id')) WHERE json_extract(CAST(data AS TEXT),'$.request_id') IS NOT NULL;")?;
         tx.execute_batch("CREATE INDEX IF NOT EXISTS control_intent ON commands(session,json_extract(CAST(data AS TEXT),'$.actor'),json_extract(CAST(data AS TEXT),'$.intent_key'));")?;
+        tx.execute_batch("CREATE INDEX IF NOT EXISTS control_authorization ON commands(session,state,json_extract(CAST(data AS TEXT),'$.action'),json_extract(CAST(data AS TEXT),'$.proof'));")?;
         tx.execute_batch(&format!(
             "PRAGMA application_id={APPLICATION}; PRAGMA user_version={SCHEMA};"
         ))?;
@@ -624,6 +627,7 @@ impl Store {
             return Ok(serde_json::from_slice(&b)?);
         }
         let command = Command {
+            previous: None,
             intent_key: String::new(),
             request_id: None,
             requested_action: crate::dynamic::Action::Disconnect,
@@ -764,6 +768,7 @@ impl Store {
             self.command_result(&c)?;
         }
         let command = Command {
+            previous: None,
             intent_key,
             request_id,
             requested_action: action,
@@ -844,6 +849,24 @@ impl Store {
         self.connection.execute("INSERT INTO reconciliations VALUES(?,?) ON CONFLICT(session) DO UPDATE SET data=excluded.data", params![session, serde_json::to_vec(state)?])?;
         Ok(())
     }
+    /// Select independently of the bounded presentation history. Hundreds of
+    /// later rejected requests must not erase the last acknowledged baseline.
+    pub fn acknowledged_authorization(
+        &self,
+        session: &str,
+        proof: &[u8],
+    ) -> Result<Option<crate::dynamic::Authorization>> {
+        let data:Option<Vec<u8>>=self.connection.query_row(
+            "SELECT data FROM commands WHERE session=? AND state='acknowledged' AND json_extract(CAST(data AS TEXT),'$.action')='update-authorization' AND json_extract(CAST(data AS TEXT),'$.proof')=? ORDER BY rowid DESC LIMIT 1",
+            params![session,serde_json::to_string(proof)?],|r|r.get(0)).optional()?;
+        data.map(|bytes| {
+            serde_json::from_slice::<Command>(&bytes)
+                .map(|c| c.desired)
+                .map_err(Into::into)
+        })
+        .transpose()
+        .map(Option::flatten)
+    }
     pub fn command_history(&self, session: &str) -> Result<Vec<Command>> {
         let mut stmt = self
             .connection
@@ -861,6 +884,12 @@ impl Store {
             |r| r.get(0),
         )?;
         let current: Command = serde_json::from_slice(&stored)?;
+        if current.previous.is_some() && current.previous != command.previous {
+            return Err(Error::Integrity);
+        }
+        if let Some(previous) = &command.previous {
+            previous.validate()?;
+        }
         if !matches!(current.state.as_str(), "pending" | "sent")
             || current.intent_key != command.intent_key
             || current.request_id != command.request_id

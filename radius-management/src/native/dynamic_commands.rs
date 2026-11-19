@@ -196,7 +196,36 @@ impl Commands {
                                         .into_iter()
                                         .zip(results)
                                         .map(|((mut c, s), e)| {
-                                            let result = validate(&mut c, &s, e, &config, &ledger);
+                                            let needs_baseline = c.actor == "radiusd"
+                                                || c.action == Action::UpdateAuthorization
+                                                || c.fallback
+                                                    .contains(&Action::UpdateAuthorization);
+                                            let baseline_ready = if c.previous.is_none()
+                                                && needs_baseline
+                                            {
+                                                match ledger
+                                                    .acknowledged_authorization(
+                                                        s.id.clone(),
+                                                        c.proof.clone(),
+                                                    )
+                                                    .and_then(worker::wait)
+                                                {
+                                                    Ok(acknowledged) => {
+                                                        c.previous = s.proof.as_ref().map(|p| {
+                                                            p.baseline(acknowledged.as_ref())
+                                                        });
+                                                        true
+                                                    }
+                                                    Err(_) => false,
+                                                }
+                                            } else {
+                                                true
+                                            };
+                                            let result = if baseline_ready {
+                                                validate(&mut c, &s, e, &config, &ledger)
+                                            } else {
+                                                Disposition::Defer
+                                            };
                                             (c, s, result)
                                         })
                                         .collect();
@@ -400,11 +429,9 @@ fn validate(
                 if command.attempts == 0 {
                     command.desired = Some(desired);
                     Disposition::Ready
-                } else if command
-                    .desired
-                    .as_ref()
-                    .is_some_and(|d| d.vlan == desired.vlan)
-                {
+                } else if command.desired.as_ref().is_some_and(|d| {
+                    d.same_policy(&desired) && d.timeout_seconds <= desired.timeout_seconds
+                }) {
                     Disposition::Ready
                 } else {
                     Disposition::Cancel
@@ -475,8 +502,9 @@ fn validate(
             let Some(proof) = &session.proof else {
                 return Disposition::Cancel;
             };
+            let baseline = proof.baseline(command.previous.as_ref());
             let relevant = if command.reason.starts_with("vlan-changed:") {
-                policy.vlan_disconnect && desired.vlan != proof.issued.vlan
+                policy.vlan_disconnect && desired.vlan != baseline.vlan
             } else if command.reason.starts_with("credential-changed:") {
                 if credentials.is_none() {
                     return Disposition::Defer;
@@ -488,14 +516,7 @@ fn validate(
                         .iter()
                         .any(|p| !credentials.as_ref().expect("checked").contains(p))
             } else if command.reason == "authorization-changed" {
-                policy.update_authorization
-                    && (desired.vlan != proof.issued.vlan
-                        || config
-                            .policies
-                            .get(session.policy.as_deref().unwrap_or_default())
-                            .is_some_and(|p| {
-                                p.reauthenticate_seconds != proof.configured_timeout_seconds
-                            }))
+                policy.update_authorization && !desired.same_policy(&baseline)
             } else {
                 false
             };
@@ -505,11 +526,9 @@ fn validate(
             if command.attempts == 0 {
                 command.desired = Some(desired);
                 Disposition::Ready
-            } else if command
-                .desired
-                .as_ref()
-                .is_some_and(|d| d.vlan == desired.vlan)
-            {
+            } else if command.desired.as_ref().is_some_and(|d| {
+                d.same_policy(&desired) && d.timeout_seconds <= desired.timeout_seconds
+            }) {
                 Disposition::Ready
             } else {
                 Disposition::Cancel
@@ -523,10 +542,11 @@ fn prepare(command: &mut Command, profile: &dynamic::Profile, id: u8, secret: &[
         return;
     };
     loop {
-        match profile.attributes(
+        match profile.attributes_with_previous(
             command.action,
             target,
             command.desired.as_ref(),
+            command.previous.as_ref(),
             worker::now_ms(),
         ) {
             Ok(Some(mut attrs)) => {

@@ -33,6 +33,39 @@ fn fixture() -> Stored {
         issues: vec![],
     }
 }
+
+#[test]
+fn complete_profiles_reach_explain_and_invalid_direct_edits_fail_validation() {
+    let mut stored = fixture();
+    let profile = stored.objects.iter_mut().find(|r| r.id == PROFILE).unwrap();
+    profile.values.extend([
+        (
+            "DownloadBitsPerSecond".into(),
+            Value::Text("10000000000".into()),
+        ),
+        ("IdleTimeoutSeconds".into(), Value::Number(120)),
+        ("FilterIds".into(), Value::List(vec!["guest".into()])),
+        ("ClientIsolation".into(), Value::Number(0)),
+    ]);
+    let compiled = access_policy::compile(&stored, POLICY).unwrap();
+    let selected = compiled
+        .explain(&radius_policy::Facts::new())
+        .unwrap()
+        .assignment
+        .unwrap();
+    assert_eq!(
+        selected.settings.number("DownloadBitsPerSecond"),
+        Some(10_000_000_000)
+    );
+    let profile = stored.objects.iter_mut().find(|r| r.id == PROFILE).unwrap();
+    profile
+        .values
+        .insert("IdleTimeoutSeconds".into(), Value::Text("120".into()));
+    assert!(access_policy::compile(&stored, POLICY).is_err());
+    assert!(stored.validate().iter().any(|i| i.object == PROFILE));
+    assert!(Kind::AccessProfile.optional("FilterIds"));
+    assert!(Kind::AccessProfile.optional("IdleTimeoutSeconds"));
+}
 #[test]
 fn accounting_accepts_implicit_enabled_rules_but_rejects_malformed_flags() {
     let mut stored = fixture();

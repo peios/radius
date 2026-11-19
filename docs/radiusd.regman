@@ -289,6 +289,619 @@ applies: live (subsequent authentication)
 VLAN sent with the complete tunnel attribute set in an Access-Accept.
 Zero is invalid. Removing the value stops sending VLAN override attributes.
 
+--- machine\software\radius\accessprofiles\<guid> reauthenticateseconds
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ReauthenticateSeconds
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Reauthenticate After (seconds). Part of Connection.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 27.
+
+--- machine\software\radius\accessprofiles\<guid> sessiontimeoutseconds
+canonical: Machine\Software\Radius\AccessProfiles\<guid> SessionTimeoutSeconds
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Session Timeout (seconds). Part of Connection.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 27.
+
+--- machine\software\radius\accessprofiles\<guid> sessionexpiryaction
+canonical: Machine\Software\Radius\AccessProfiles\<guid> SessionExpiryAction
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Session Expiry Action. Part of Connection.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 29.
+
+--- machine\software\radius\accessprofiles\<guid> idletimeoutseconds
+canonical: Machine\Software\Radius\AccessProfiles\<guid> IdleTimeoutSeconds
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Idle Timeout (seconds). Part of Connection.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 28.
+
+--- machine\software\radius\accessprofiles\<guid> downloadbitspersecond
+canonical: Machine\Software\Radius\AccessProfiles\<guid> DownloadBitsPerSecond
+type: REG_SZ
+default: (absent, no profile override)
+valid: positive unsigned decimal u64
+applies: live (subsequent authentication and qualified session controls)
+
+Download Limit (bits/second). Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> uploadbitspersecond
+canonical: Machine\Software\Radius\AccessProfiles\<guid> UploadBitsPerSecond
+type: REG_SZ
+default: (absent, no profile override)
+valid: positive unsigned decimal u64
+applies: live (subsequent authentication and qualified session controls)
+
+Upload Limit (bits/second). Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> downloadburstbytes
+canonical: Machine\Software\Radius\AccessProfiles\<guid> DownloadBurstBytes
+type: REG_SZ
+default: (absent, no profile override)
+valid: positive unsigned decimal u64
+applies: live (subsequent authentication and qualified session controls)
+
+Download Burst (bytes). Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> uploadburstbytes
+canonical: Machine\Software\Radius\AccessProfiles\<guid> UploadBurstBytes
+type: REG_SZ
+default: (absent, no profile override)
+valid: positive unsigned decimal u64
+applies: live (subsequent authentication and qualified session controls)
+
+Upload Burst (bytes). Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> minimumdownloadbitspersecond
+canonical: Machine\Software\Radius\AccessProfiles\<guid> MinimumDownloadBitsPerSecond
+type: REG_SZ
+default: (absent, no profile override)
+valid: positive unsigned decimal u64
+applies: live (subsequent authentication and qualified session controls)
+
+Minimum Download Rate (bits/second). Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> minimumuploadbitspersecond
+canonical: Machine\Software\Radius\AccessProfiles\<guid> MinimumUploadBitsPerSecond
+type: REG_SZ
+default: (absent, no profile override)
+valid: positive unsigned decimal u64
+applies: live (subsequent authentication and qualified session controls)
+
+Minimum Upload Rate (bits/second). Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> serviceclass
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ServiceClass
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Service Class. Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> priority
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Priority
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Traffic Priority. Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> userprioritytable
+canonical: Machine\Software\Radius\AccessProfiles\<guid> UserPriorityTable
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+802.1p Priority Map. Part of Bandwidth and Priority.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 59.
+
+--- machine\software\radius\accessprofiles\<guid> vlanname
+canonical: Machine\Software\Radius\AccessProfiles\<guid> VlanName
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+VLAN Name. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 58.
+
+--- machine\software\radius\accessprofiles\<guid> taggedvlannames
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TaggedVlanNames
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+Tagged VLAN Names. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 58.
+
+--- machine\software\radius\accessprofiles\<guid> untaggedvlannames
+canonical: Machine\Software\Radius\AccessProfiles\<guid> UntaggedVlanNames
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+Untagged VLAN Names. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 58.
+
+--- machine\software\radius\accessprofiles\<guid> taggedvlans
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TaggedVlans
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+Tagged VLAN IDs. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 56.
+
+--- machine\software\radius\accessprofiles\<guid> untaggedvlans
+canonical: Machine\Software\Radius\AccessProfiles\<guid> UntaggedVlans
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+Untagged VLAN IDs. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 56.
+
+--- machine\software\radius\accessprofiles\<guid> ingressfiltering
+canonical: Machine\Software\Radius\AccessProfiles\<guid> IngressFiltering
+type: REG_DWORD
+default: (absent, no profile override)
+valid: 0 or 1
+applies: live (subsequent authentication and qualified session controls)
+
+Ingress Filtering. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 57.
+
+--- machine\software\radius\accessprofiles\<guid> accessrole
+canonical: Machine\Software\Radius\AccessProfiles\<guid> AccessRole
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Access Role. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> filterids
+canonical: Machine\Software\Radius\AccessProfiles\<guid> FilterIds
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+Named Filters. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 11.
+
+--- machine\software\radius\accessprofiles\<guid> filterrules
+canonical: Machine\Software\Radius\AccessProfiles\<guid> FilterRules
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+NAS Filter Rules. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 92.
+
+--- machine\software\radius\accessprofiles\<guid> clientisolation
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ClientIsolation
+type: REG_DWORD
+default: (absent, no profile override)
+valid: 0 or 1
+applies: live (subsequent authentication and qualified session controls)
+
+Client Isolation. Part of Segmentation and Traffic.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> framedipv4address
+canonical: Machine\Software\Radius\AccessProfiles\<guid> FramedIpv4Address
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+IPv4 Address. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 8.
+
+--- machine\software\radius\accessprofiles\<guid> framedipv4netmask
+canonical: Machine\Software\Radius\AccessProfiles\<guid> FramedIpv4Netmask
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+IPv4 Netmask. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 9.
+
+--- machine\software\radius\accessprofiles\<guid> ipv4pool
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Ipv4Pool
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+IPv4 Address Pool. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 88.
+
+--- machine\software\radius\accessprofiles\<guid> ipv4routes
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Ipv4Routes
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+IPv4 Routes. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 22.
+
+--- machine\software\radius\accessprofiles\<guid> framedipv6address
+canonical: Machine\Software\Radius\AccessProfiles\<guid> FramedIpv6Address
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+IPv6 Address. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 168.
+
+--- machine\software\radius\accessprofiles\<guid> framedipv6prefix
+canonical: Machine\Software\Radius\AccessProfiles\<guid> FramedIpv6Prefix
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+IPv6 Prefix. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 97.
+
+--- machine\software\radius\accessprofiles\<guid> delegatedipv6prefix
+canonical: Machine\Software\Radius\AccessProfiles\<guid> DelegatedIpv6Prefix
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Delegated IPv6 Prefix. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 123.
+
+--- machine\software\radius\accessprofiles\<guid> ipv6pool
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Ipv6Pool
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+IPv6 Address Pool. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 100.
+
+--- machine\software\radius\accessprofiles\<guid> delegatedipv6pool
+canonical: Machine\Software\Radius\AccessProfiles\<guid> DelegatedIpv6Pool
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Delegated IPv6 Pool. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 171.
+
+--- machine\software\radius\accessprofiles\<guid> ipv6routes
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Ipv6Routes
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+IPv6 Routes. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 99.
+
+--- machine\software\radius\accessprofiles\<guid> ipv4dnsservers
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Ipv4DnsServers
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+IPv4 DNS Servers. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Equipment mapping.
+
+--- machine\software\radius\accessprofiles\<guid> ipv6dnsservers
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Ipv6DnsServers
+type: REG_MULTI_SZ
+default: (absent, no profile override)
+valid: 1–32 distinct nonempty validated strings
+applies: live (subsequent authentication and qualified session controls)
+
+IPv6 DNS Servers. Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 169.
+
+--- machine\software\radius\accessprofiles\<guid> mtu
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Mtu
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+MTU (bytes). Part of Addressing and Routing.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 12.
+
+--- machine\software\radius\accessprofiles\<guid> servicetype
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ServiceType
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+RADIUS Service Type. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 6.
+
+--- machine\software\radius\accessprofiles\<guid> framedprotocol
+canonical: Machine\Software\Radius\AccessProfiles\<guid> FramedProtocol
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Framed Protocol. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 7.
+
+--- machine\software\radius\accessprofiles\<guid> tunneltype
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TunnelType
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Tunnel Type. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 64.
+
+--- machine\software\radius\accessprofiles\<guid> tunnelmediumtype
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TunnelMediumType
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Tunnel Medium Type. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 65.
+
+--- machine\software\radius\accessprofiles\<guid> tunnelclientendpoint
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TunnelClientEndpoint
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Tunnel Client Endpoint. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 66.
+
+--- machine\software\radius\accessprofiles\<guid> tunnelserverendpoint
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TunnelServerEndpoint
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Tunnel Server Endpoint. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 67.
+
+--- machine\software\radius\accessprofiles\<guid> tunnelassignmentid
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TunnelAssignmentId
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Tunnel Assignment ID. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 82.
+
+--- machine\software\radius\accessprofiles\<guid> tunnelpreference
+canonical: Machine\Software\Radius\AccessProfiles\<guid> TunnelPreference
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Tunnel Preference. Part of Tunnels and Service.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 83.
+
+--- machine\software\radius\accessprofiles\<guid> accountinginterimseconds
+canonical: Machine\Software\Radius\AccessProfiles\<guid> AccountingInterimSeconds
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Accounting Update Interval (seconds). Part of Accounting.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 85.
+
+--- machine\software\radius\accessprofiles\<guid> servicelabel
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ServiceLabel
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Reporting Service Label. Part of Accounting.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: Local metadata.
+
+--- machine\software\radius\accessprofiles\<guid> managementprotocol
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ManagementProtocol
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Management Protocol. Part of Device Administration.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 133.
+
+--- machine\software\radius\accessprofiles\<guid> managementtransportprotection
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ManagementTransportProtection
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Management Transport Protection. Part of Device Administration.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 134.
+
+--- machine\software\radius\accessprofiles\<guid> managementpolicyid
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ManagementPolicyId
+type: REG_SZ
+default: (absent, no profile override)
+valid: nonempty bounded text, validated for this setting
+applies: live (subsequent authentication and qualified session controls)
+
+Management Policy ID. Part of Device Administration.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 135.
+
+--- machine\software\radius\accessprofiles\<guid> managementprivilegelevel
+canonical: Machine\Software\Radius\AccessProfiles\<guid> ManagementPrivilegeLevel
+type: REG_DWORD
+default: (absent, no profile override)
+valid: bounded DWORD; zero allowed only for priority and privilege
+applies: live (subsequent authentication and qualified session controls)
+
+Management Privilege Level. Part of Device Administration.
+
+See the Access Profile Settings reference for validation, encoding and
+qualification limits. Standard attribute: 136.
+
+--- machine\software\radius\accessprofiles\<guid> extensions
+canonical: Machine\Software\Radius\AccessProfiles\<guid> Extensions
+type: REG_SZ
+default: (absent, no vendor extensions)
+valid: JSON object of typed Extension.<namespace>.<name> settings
+applies: live (subsequent authentication and qualified session controls)
+
+Namespaced vendor authorization settings with explicit equipment mappings.
+
+Values are unsigned numbers, booleans, bounded text, or string lists. Unknown
+ordinary fields are refused. Extensions require vendor targets and cannot
+replace server-owned credentials, identity, selectors or integrity fields.
+
 --- machine\software\radius\accesspolicies\<guid>\rules\<rule-guid>
 canonical: Machine\Software\Radius\AccessPolicies\<guid>\Rules\<rule-guid>
 

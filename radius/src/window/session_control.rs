@@ -47,10 +47,18 @@ fn authorization(value: &serde_json::Value, observed: bool) -> String {
                 "No VLAN override".into()
             }
         });
-    match value["timeout_seconds"].as_u64() {
+    let mut summary = match value["timeout_seconds"].as_u64() {
         Some(seconds) => format!("{vlan} · Session timeout {seconds} seconds"),
         None => vlan,
+    };
+    if let Some(settings) = value["attributes"]["settings"].as_object() {
+        for (name, value) in settings {
+            let title = radius_authorization::spec(name)
+                .map_or_else(|| super::label(name), |spec| spec.label);
+            summary.push_str(&format!(" · {title}: {value}"));
+        }
     }
+    summary
 }
 pub(super) fn evidence(detail: &serde_json::Value) -> String {
     let mut rows = String::new();

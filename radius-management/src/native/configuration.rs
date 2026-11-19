@@ -140,6 +140,7 @@ pub fn prepare(stored: &Stored) -> io::Result<Config> {
             },
         );
     }
+    let dynamic = crate::dynamic::prepare(stored).map_err(invalid)?;
     let mut clients = BTreeMap::new();
     for r in stored.objects.iter().filter(|r| r.kind == Kind::Client) {
         let secret = if r.enabled() {
@@ -153,6 +154,7 @@ pub fn prepare(stored: &Stored) -> io::Result<Config> {
             r.id.clone(),
             Client {
                 name: r.id.clone(),
+                authorization: dynamic.profile(&r.id).authorization,
                 enabled: r.enabled(),
                 secret,
                 addresses: r

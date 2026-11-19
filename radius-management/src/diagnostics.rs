@@ -117,6 +117,7 @@ pub fn field_type(key: &str) -> Option<FieldType> {
         | "object.radiusd.config.saved-fingerprint"
         | "object.radiusd.assignment.rule.id"
         | "object.radiusd.assignment.profile.id"
+        | "object.radiusd.assignment.fingerprint"
         | "object.radiusd.reply"
         | "object.radiusd.progress.result"
         | "outcome.reason"

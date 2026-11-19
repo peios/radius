@@ -23,7 +23,7 @@ use std::{
             net::{UnixListener, UnixStream},
         },
     },
-    sync::{Arc, RwLock, mpsc},
+    sync::{mpsc, Arc, RwLock},
     thread,
     time::Duration,
 };
@@ -212,13 +212,11 @@ impl Service {
         let watcher = service.clone();
         thread::Builder::new()
             .name("radius-accounting-config".into())
-            .spawn(move || {
-                loop {
-                    if tx.send(watcher.load()).is_err() {
-                        return;
-                    }
-                    thread::sleep(Duration::from_secs(1));
+            .spawn(move || loop {
+                if tx.send(watcher.load()).is_err() {
+                    return;
                 }
+                thread::sleep(Duration::from_secs(1));
             })?;
         let worker = service.clone();
         thread::Builder::new()
@@ -893,6 +891,8 @@ fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serd
                     Some(radius_accounting::dynamic::Authorization {
                         vlan: None,
                         timeout_seconds: 1,
+                        attributes: Default::default(),
+                        configured_timeout_seconds: None,
                     })
                 }
                 Some(Evaluation::Unavailable(_)) | None => {

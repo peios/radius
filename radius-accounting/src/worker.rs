@@ -1,17 +1,17 @@
 //! Bounded database owner. Packet loops only enqueue and poll completions.
 use crate::{
-    Error, Result,
     model::{Grant, Observation, Receipt, Session, Settings},
     quota::{Balance, Budget},
     store::{Annotation, Command, Correction, Filter, Health, Page, Store},
+    Error, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
         mpsc::{self, Receiver, SyncSender, TrySendError},
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -74,6 +74,11 @@ enum Work {
     ),
     Commands(SyncSender<Result<Vec<Command>>>),
     CommandHistory(String, SyncSender<Result<Vec<Command>>>),
+    AcknowledgedAuthorization(
+        String,
+        Vec<u8>,
+        SyncSender<Result<Option<crate::dynamic::Authorization>>>,
+    ),
     CommandRequest(String, String, SyncSender<Result<Option<Command>>>),
     Dispatch(SyncSender<Result<Vec<(Command, Session)>>>),
     CommandResult(Box<Command>, SyncSender<Result<()>>),
@@ -186,7 +191,20 @@ impl Handle {
     pub fn command_history(&self, session: String) -> Result<Completion<Vec<Command>>> {
         self.submit(|tx| Work::CommandHistory(session, tx))
     }
-    pub fn command_request(&self, actor:String, request:String)->Result<Completion<Option<Command>>>{self.submit(|tx|Work::CommandRequest(actor,request,tx))}
+    pub fn acknowledged_authorization(
+        &self,
+        session: String,
+        proof: Vec<u8>,
+    ) -> Result<Completion<Option<crate::dynamic::Authorization>>> {
+        self.submit(|tx| Work::AcknowledgedAuthorization(session, proof, tx))
+    }
+    pub fn command_request(
+        &self,
+        actor: String,
+        request: String,
+    ) -> Result<Completion<Option<Command>>> {
+        self.submit(|tx| Work::CommandRequest(actor, request, tx))
+    }
     pub fn dispatch(&self) -> Result<Completion<Vec<(Command, Session)>>> {
         self.submit(Work::Dispatch)
     }
@@ -420,7 +438,12 @@ fn run(
                     Work::CommandHistory(id, tx) => {
                         let _ = tx.try_send(s.command_history(&id));
                     }
-                    Work::CommandRequest(actor,request,tx)=>{let _=tx.try_send(s.command_request(&actor,&request));}
+                    Work::AcknowledgedAuthorization(id, proof, tx) => {
+                        let _ = tx.try_send(s.acknowledged_authorization(&id, &proof));
+                    }
+                    Work::CommandRequest(actor, request, tx) => {
+                        let _ = tx.try_send(s.command_request(&actor, &request));
+                    }
                     Work::Dispatch(tx) => {
                         let result = s
                             .commands()
@@ -467,7 +490,8 @@ fn run(
                     Work::Reconciliation(_, tx) => unavailable(tx),
                     Work::Commands(tx) => unavailable(tx),
                     Work::CommandHistory(_, tx) => unavailable(tx),
-                    Work::CommandRequest(_,_,tx)=>unavailable(tx),
+                    Work::AcknowledgedAuthorization(_, _, tx) => unavailable(tx),
+                    Work::CommandRequest(_, _, tx) => unavailable(tx),
                     Work::Dispatch(tx) => unavailable(tx),
                     Work::Record(..) | Work::Stop(..) => unreachable!(),
                 }

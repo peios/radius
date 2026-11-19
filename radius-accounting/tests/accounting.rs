@@ -21,6 +21,8 @@ fn proof(g: &Grant, vlan: Option<u16>, revision: u8) -> radius_accounting::dynam
         issued: Authorization {
             vlan,
             timeout_seconds: 3600,
+            attributes: Default::default(),
+            configured_timeout_seconds: None,
         },
         configured_timeout_seconds: 3600,
         credentials: vec![CredentialBinding {
@@ -73,6 +75,51 @@ fn fresh_proof_order_survives_equal_clocks_delayed_class_and_rebuild() {
 }
 
 #[test]
+fn complete_authorization_survives_reopen_and_rebuild() {
+    let dir =
+        std::env::temp_dir().join(format!("radius-rich-{}", radius_accounting::id().unwrap()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("ledger.db");
+    let mut store = Store::open(&path, Settings::default()).unwrap();
+    let g = grant(91);
+    store.grant(&g, 0).unwrap();
+    let mut p = proof(&g, Some(20), 1);
+    let settings: radius_authorization::Settings =
+        serde_json::from_value(serde_json::json!({"FilterIds":["guest"],"IdleTimeoutSeconds":120}))
+            .unwrap();
+    p.issued.attributes = settings.compile(Some(20), &Default::default()).unwrap();
+    p.issued.configured_timeout_seconds = Some(3600);
+    store.bind_grant(&p).unwrap();
+    let id = store
+        .record(&[with_identity(observation(1, b"rich", 100), &g)])
+        .unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    let original = store.session(&id).unwrap().unwrap().proof.unwrap();
+    drop(store);
+    let mut store = Store::open(&path, Settings::default()).unwrap();
+    assert_eq!(
+        store.session(&id).unwrap().unwrap().proof.as_ref(),
+        Some(&original)
+    );
+    store.rebuild().unwrap();
+    assert_eq!(
+        store.session(&id).unwrap().unwrap().proof.as_ref(),
+        Some(&original)
+    );
+    drop(store);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+    drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn schema_one_upgrade_preserves_unknown_baseline_accounting_and_pending_disconnect() {
     let directory = std::env::temp_dir().join(format!(
         "radius-upgrade-{}",
@@ -119,6 +166,77 @@ fn schema_one_upgrade_preserves_unknown_baseline_accounting_and_pending_disconne
 }
 
 #[test]
+fn last_acknowledged_authorization_is_independent_of_the_history_page_limit() {
+    use radius_accounting::dynamic::{Action, Authorization, Intent};
+    let mut store = Store::memory(Settings::default()).unwrap();
+    let g = grant(91);
+    store.grant(&g, 0).unwrap();
+    store.bind_grant(&proof(&g, Some(20), 1)).unwrap();
+    let session = store
+        .record(&[with_identity(observation(1, b"long-controls", 100), &g)])
+        .unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    let desired = Authorization {
+        vlan: Some(30),
+        timeout_seconds: 300,
+        configured_timeout_seconds: Some(300),
+        attributes: Default::default(),
+    };
+    let mut command = store
+        .enqueue_dynamic(
+            Intent {
+                intent_key: String::new(),
+                request_id: None,
+                session: session.clone(),
+                actor: USER.into(),
+                reason: "manual".into(),
+                action: Action::UpdateAuthorization,
+                configuration: "a".repeat(64),
+                desired: Some(desired.clone()),
+                fallback: vec![],
+            },
+            101000,
+        )
+        .unwrap();
+    command.state = "acknowledged".into();
+    store.command_result(&command).unwrap();
+    for n in 0..205 {
+        let mut failed = store
+            .enqueue_disconnect(&session, USER, 102000 + n, "manual")
+            .unwrap();
+        failed.state = "rejected".into();
+        store.command_result(&failed).unwrap();
+    }
+    assert_eq!(store.command_history(&session).unwrap().len(), 200);
+    assert!(store
+        .command_history(&session)
+        .unwrap()
+        .iter()
+        .all(|c| c.state != "acknowledged"));
+    assert_eq!(
+        store
+            .acknowledged_authorization(&session, &g.reference)
+            .unwrap(),
+        Some(desired.clone())
+    );
+    assert_eq!(
+        store
+            .acknowledged_authorization(&session, &[99; 16])
+            .unwrap(),
+        None
+    );
+    store.rebuild().unwrap();
+    assert_eq!(
+        store
+            .acknowledged_authorization(&session, &g.reference)
+            .unwrap(),
+        Some(desired)
+    );
+}
+
+#[test]
 fn unsent_supersession_is_durable_and_cannot_be_overwritten_by_stale_dispatch() {
     use radius_accounting::dynamic::*;
     let mut store = Store::memory(Settings::default()).unwrap();
@@ -158,13 +276,11 @@ fn unsent_supersession_is_durable_and_cannot_be_overwritten_by_stale_dispatch() 
     assert!(store.command_result(&old).is_err());
     assert_eq!(store.commands().unwrap().len(), 1);
     assert_eq!(store.commands().unwrap()[0].id, new.id);
-    assert!(
-        store
-            .command_history(&id)
-            .unwrap()
-            .iter()
-            .any(|c| c.id == old.id && c.state == "superseded")
-    );
+    assert!(store
+        .command_history(&id)
+        .unwrap()
+        .iter()
+        .any(|c| c.id == old.id && c.state == "superseded"));
 }
 
 #[test]
@@ -193,28 +309,24 @@ fn manual_request_ids_retain_terminal_results_and_cannot_retarget() {
     assert_eq!(repeated.id, original.id);
     assert_eq!(repeated.state, "acknowledged");
     assert_eq!(store.command_history(&id).unwrap().len(), 1);
-    assert!(
-        store
-            .enqueue_dynamic(
-                Intent {
-                    session: "another".into(),
-                    ..intent.clone()
-                },
-                103000
-            )
-            .is_err()
-    );
-    assert!(
-        store
-            .enqueue_dynamic(
-                Intent {
-                    action: Action::Reauthenticate,
-                    ..intent
-                },
-                103000
-            )
-            .is_err()
-    );
+    assert!(store
+        .enqueue_dynamic(
+            Intent {
+                session: "another".into(),
+                ..intent.clone()
+            },
+            103000
+        )
+        .is_err());
+    assert!(store
+        .enqueue_dynamic(
+            Intent {
+                action: Action::Reauthenticate,
+                ..intent
+            },
+            103000
+        )
+        .is_err());
     assert_eq!(
         store
             .command_request(USER, "stable-manual-request")
@@ -409,8 +521,8 @@ fn batch_failure_has_no_partial_receipts_or_interpretation() {
 fn owner_recovers_without_losing_configured_limits() {
     use radius_accounting::worker::{self, Handle};
     use std::sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     };
     let directory = std::env::temp_dir().join(format!(
         "radius-worker-{}",
@@ -435,17 +547,15 @@ fn owner_recovers_without_losing_configured_limits() {
         }),
     )
     .unwrap();
-    assert!(
-        worker::wait(
-            handle
-                .configure(
-                    settings,
-                    vec![budget("closed", USER, Dimension::Concurrent, 0)]
-                )
-                .unwrap()
-        )
-        .is_err()
-    );
+    assert!(worker::wait(
+        handle
+            .configure(
+                settings,
+                vec![budget("closed", USER, Dimension::Concurrent, 0)]
+            )
+            .unwrap()
+    )
+    .is_err());
     available.store(true, Ordering::SeqCst);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !handle.snapshot().available && std::time::Instant::now() < deadline {
@@ -731,12 +841,10 @@ fn rebuilding_retained_evidence_preserves_ids_usage_and_commands() {
     store.rebuild().unwrap();
     store.rebuild().unwrap();
     assert_eq!(before, store.balances(&g, 120000).unwrap());
-    assert!(
-        store
-            .session(start.session.as_ref().unwrap())
-            .unwrap()
-            .is_some()
-    );
+    assert!(store
+        .session(start.session.as_ref().unwrap())
+        .unwrap()
+        .is_some());
     assert_eq!(commands[0].id, store.commands().unwrap()[0].id);
 }
 #[test]
@@ -767,12 +875,10 @@ fn retention_keeps_lifetime_allowances_after_personal_history_expires() {
     let before = store.balances(&g, 120000).unwrap();
     store.maintain(120000).unwrap();
     store.rebuild().unwrap();
-    assert!(
-        store
-            .session(start.session.as_ref().unwrap())
-            .unwrap()
-            .is_none()
-    );
+    assert!(store
+        .session(start.session.as_ref().unwrap())
+        .unwrap()
+        .is_none());
     assert_eq!(before, store.balances(&g, 120000).unwrap());
 }
 #[test]
@@ -917,14 +1023,12 @@ fn quota_disconnect_does_not_fake_a_stop_or_repeat_terminal_commands() {
     store.command_result(&commands[0]).unwrap();
     store.enforce(120000).unwrap();
     assert!(store.commands().unwrap().is_empty());
-    assert!(
-        store
-            .session(r.session.as_ref().unwrap())
-            .unwrap()
-            .unwrap()
-            .end_ms
-            .is_none()
-    );
+    assert!(store
+        .session(r.session.as_ref().unwrap())
+        .unwrap()
+        .unwrap()
+        .end_ms
+        .is_none());
     assert_eq!(
         store
             .enqueue_disconnect(
@@ -1086,13 +1190,11 @@ fn concurrent_limit_allows_reauthentication_without_reserving_another_slot() {
     renewed.issued_ms = 110000;
     assert!(store.grant(&renewed, 110000).is_ok());
     assert!(store.grant(&renewed, 110001).is_ok());
-    assert!(
-        store
-            .balances(&first, 110001)
-            .unwrap()
-            .iter()
-            .all(|b| b.used == 1)
-    );
+    assert!(store
+        .balances(&first, 110001)
+        .unwrap()
+        .iter()
+        .all(|b| b.used == 1));
     assert_eq!(store.enforce(110001).unwrap(), 0);
 
     for (n, change) in ["station", "client", "policy", "sid", "missing", "empty"]
@@ -1119,13 +1221,11 @@ fn concurrent_limit_allows_reauthentication_without_reserving_another_slot() {
     let mut stop = with_identity(observation(2, b"reauth", 112), &renewed);
     stop.station = first.station.clone();
     store.record(&[stop]).unwrap();
-    assert!(
-        store
-            .balances(&first, 112001)
-            .unwrap()
-            .iter()
-            .all(|b| b.used == 0)
-    );
+    assert!(store
+        .balances(&first, 112001)
+        .unwrap()
+        .iter()
+        .all(|b| b.used == 0));
 }
 
 #[test]
@@ -1234,17 +1334,15 @@ fn row_authorization_precedes_pagination_and_revision_is_checked() {
     assert_eq!(page.sessions.len(), 2);
     assert!(page.next.is_some());
     store.record(&[observation(1, b"new", 100)]).unwrap();
-    assert!(
-        store
-            .page(
-                &Filter {
-                    revision: Some(page.revision),
-                    ..filter
-                },
-                |_| true
-            )
-            .is_err()
-    );
+    assert!(store
+        .page(
+            &Filter {
+                revision: Some(page.revision),
+                ..filter
+            },
+            |_| true
+        )
+        .is_err());
 }
 #[test]
 fn durable_reopen_and_single_owner() {
@@ -1262,12 +1360,10 @@ fn durable_reopen_and_single_owner() {
         .remove(0);
     drop(store);
     let mut store = Store::open(&path, Settings::default()).unwrap();
-    assert!(
-        store
-            .session(r.session.as_ref().unwrap())
-            .unwrap()
-            .is_some()
-    );
+    assert!(store
+        .session(r.session.as_ref().unwrap())
+        .unwrap()
+        .is_some());
     assert_eq!(
         store.record(&[observation(1, b"x", 100)]).unwrap()[0].id,
         r.id

@@ -43,7 +43,7 @@ The fixture uses explicit test credentials and never contacts authd.
 ## Component checks
 
 ```sh
-pekit test --strict -j 2 unit integration management policy accounting clippy doctests
+pekit test --strict -j 2 unit integration management policy authorization accounting clippy doctests
 pekit build --strict -j 2 test_server radiusd radius_cli radius
 pekit test --strict -j 2 native native_management administration native_clippy native_management_clippy administration_clippy
 ```
@@ -63,6 +63,13 @@ malformed and truncated packets, duplicate attributes, conversation quotas,
 idle and overall deadlines,
 binding changes, one-shot admission and rejection without key delivery.
 
+The `authorization` target checks typed settings, independent standard and
+vendor wire vectors, exact unit conversion, protected attributes, reset
+requirements and complete reply bounds. Native coordinator and loopback CoA
+checks cover complete assignments, cache integrity, quota gating, real UDP
+requests and acknowledged baselines. These establish server behavior; actual
+equipment needs separate shaping, filter, gateway, and management tests.
+
 ## Native session controls
 
 In a fresh, isolated guest, run `tests/native/setup.sh`, then
@@ -81,6 +88,14 @@ durable request IDs, restart, rebuild, and real PEAP/TTLS authentication.
 Automatic cases use direct Registry VLAN edits, account disablement, password
 replacement with an explicit Disconnect fallback, and opt-in CoA updates.
 The generic profile does not claim fresh reauthentication support.
+
+`tests/native/richer-profiles.sh` checks saved setting types, equipment
+mapping, Explain, exact 64-bit values, unsupported ranges, invalid direct
+Registry edits, removal, restart, TLS 1.2/1.3 authentication, key agreement,
+and actual-caller permission checks. Run it after `setup.sh` in an isolated
+guest, or after the session-control scripts to include the accounting ledger.
+It qualifies server behavior with a loopback supplicant; no fixture emulates
+traffic shaping or gateway enforcement.
 
 A migration fixture can seed accounts with a previously qualified format-6
 lpsd before switching to the new runtime. Set

@@ -19,11 +19,10 @@ pub fn value_bytes(values: &crate::model::Values) -> usize {
 }
 
 pub fn profile(record: &Record) -> Result<Profile, String> {
-    if record
-        .values
-        .keys()
-        .any(|k| !matches!(k.as_str(), "Name" | "Enabled" | "VlanId"))
-    {
+    if record.values.keys().any(|k| {
+        !matches!(k.as_str(), "Name" | "Enabled" | "VlanId" | "Extensions")
+            && radius_authorization::spec(k).is_none()
+    }) {
         return Err("unknown access profile field".into());
     }
     let vlan = match record.values.get("VlanId") {
@@ -36,9 +35,53 @@ pub fn profile(record: &Record) -> Result<Profile, String> {
         name: record.name().into(),
         enabled: record.enabled(),
         vlan,
+        settings: authorization_settings(record)?,
     };
     profile.validate()?;
     Ok(profile)
+}
+
+fn authorization_settings(record: &Record) -> Result<radius_authorization::Settings, String> {
+    use radius_authorization::{Kind as Type, Value as Setting};
+    let mut values = BTreeMap::new();
+    for spec in radius_authorization::FIELDS {
+        let Some(value) = record.values.get(spec.name) else {
+            continue;
+        };
+        let setting = match (spec.kind, value) {
+            (Type::Number, Value::Number(v)) => Setting::Number(u64::from(*v)),
+            (Type::Number, Value::Text(v))
+                if spec.name.ends_with("BitsPerSecond") || spec.name.ends_with("BurstBytes") =>
+            {
+                Setting::Number(
+                    v.parse().map_err(|_| {
+                        format!("{} must be an unsigned decimal integer", spec.name)
+                    })?,
+                )
+            }
+            (Type::Boolean, Value::Number(v)) if *v <= 1 => Setting::Boolean(*v == 1),
+            (Type::Text, Value::Text(v)) => Setting::Text(v.clone()),
+            (Type::List, Value::List(v)) => Setting::List(v.clone()),
+            _ => return Err(format!("{} has the wrong Registry type", spec.name)),
+        };
+        values.insert(spec.name.into(), setting);
+    }
+    if let Some(value) = record.values.get("Extensions") {
+        let Value::Text(json) = value else {
+            return Err("Extensions requires REG_SZ JSON".into());
+        };
+        let extensions: BTreeMap<String, Setting> =
+            serde_json::from_str(json).map_err(|e| format!("invalid Extensions: {e}"))?;
+        for (name, value) in extensions {
+            if !name.starts_with("Extension.") {
+                return Err("extension names must begin Extension.".into());
+            }
+            values.insert(name, value);
+        }
+    }
+    let settings = radius_authorization::Settings(values);
+    settings.validate()?;
+    Ok(settings)
 }
 pub fn validate_scope(rule: &Record, stored: &Stored) -> Result<(), String> {
     let policy = rule

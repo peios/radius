@@ -18,10 +18,31 @@ pub enum Action {
 pub struct Authorization {
     pub vlan: Option<u16>,
     pub timeout_seconds: u32,
+    #[serde(default)]
+    pub attributes: radius_authorization::Compiled,
+    /// The policy cap before current allowance balances shorten this reply.
+    #[serde(default)]
+    pub configured_timeout_seconds: Option<u32>,
 }
 impl Authorization {
+    pub fn same_policy(&self, other: &Self) -> bool {
+        self.vlan == other.vlan
+            && self.attributes == other.attributes
+            && self
+                .configured_timeout_seconds
+                .unwrap_or(self.timeout_seconds)
+                == other
+                    .configured_timeout_seconds
+                    .unwrap_or(other.timeout_seconds)
+    }
     pub fn validate(&self) -> Result<()> {
-        if self.vlan.is_some_and(|v| !(1..=4094).contains(&v)) || self.timeout_seconds == 0 {
+        self.attributes.validate().map_err(Error::Configuration)?;
+        if self.vlan.is_some_and(|v| !(1..=4094).contains(&v))
+            || self.timeout_seconds == 0
+            || self
+                .configured_timeout_seconds
+                .is_some_and(|v| v == 0 || self.timeout_seconds > v)
+        {
             return Err(Error::Malformed);
         }
         Ok(())
@@ -47,6 +68,15 @@ pub struct Proof {
     pub credentials: Vec<CredentialBinding>,
 }
 impl Proof {
+    /// Last acknowledged update for this proof, or its original issued state.
+    /// Legacy issued records kept the configured cap in the enclosing proof.
+    pub fn baseline(&self, acknowledged: Option<&Authorization>) -> Authorization {
+        let mut baseline = acknowledged.unwrap_or(&self.issued).clone();
+        if acknowledged.is_none() && baseline.configured_timeout_seconds.is_none() {
+            baseline.configured_timeout_seconds = Some(self.configured_timeout_seconds);
+        }
+        baseline
+    }
     pub fn validate(&self) -> Result<()> {
         self.issued.validate()?;
         if self.grant.is_empty()
@@ -248,6 +278,9 @@ pub struct Profile {
     /// Clearing a VLAN override has no universal standard CoA encoding.
     #[serde(default)]
     pub clear_vlan: Vec<Encoding>,
+    /// Shared admission/CoA mapping for typed access-profile settings.
+    #[serde(default)]
+    pub authorization: radius_authorization::Mappings,
     pub recipes: Vec<Recipe>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +323,7 @@ impl Default for Profile {
             proxy_state_nonce: true,
             identifier_reuse_seconds: identifier_window(),
             clear_vlan: vec![],
+            authorization: Default::default(),
             recipes: vec![
                 Recipe {
                     action: Action::Disconnect,
@@ -327,6 +361,13 @@ impl Default for Profile {
     }
 }
 impl Profile {
+    pub fn wispr_rates() -> Self {
+        Self {
+            name: "RFC 5176 with WISPr admission rates".into(),
+            authorization: radius_authorization::Mappings::wispr_rates(),
+            ..Self::default()
+        }
+    }
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > 65536 {
             return Err(Error::Limit);
@@ -336,6 +377,9 @@ impl Profile {
         Ok(value)
     }
     pub fn validate(&self) -> Result<()> {
+        self.authorization
+            .validate()
+            .map_err(Error::Configuration)?;
         if self.version != 1
             || self.name.is_empty()
             || self.name.len() > 128
@@ -431,6 +475,16 @@ impl Profile {
         desired: Option<&Authorization>,
         now: i64,
     ) -> Result<Option<Vec<Attribute>>> {
+        self.attributes_with_previous(action, target, desired, None, now)
+    }
+    pub fn attributes_with_previous(
+        &self,
+        action: Action,
+        target: &Target,
+        desired: Option<&Authorization>,
+        previous: Option<&Authorization>,
+        now: i64,
+    ) -> Result<Option<Vec<Attribute>>> {
         self.validate()?;
         let Some(recipe) = self.recipes.iter().find(|r| r.action == action) else {
             return Ok(None);
@@ -455,6 +509,7 @@ impl Profile {
             if action == Action::UpdateAuthorization
                 && desired.vlan.is_none()
                 && self.clear_vlan.is_empty()
+                && previous.is_none_or(|p| p.vlan.is_some())
             {
                 return Ok(None);
             }
@@ -475,6 +530,49 @@ impl Profile {
                     if let Some(attr) = encoding.encode(desired)? {
                         attrs.push(attr);
                     }
+                }
+            }
+            if action == Action::UpdateAuthorization {
+                let empty = radius_authorization::Compiled::default();
+                let old = previous.map(|p| &p.attributes).unwrap_or(&empty);
+                let extra = match self.authorization.updates(old, &desired.attributes) {
+                    Ok(a) => a,
+                    Err(_) => return Ok(None),
+                };
+                let occupied: std::collections::BTreeSet<_> = attrs
+                    .iter()
+                    .map(|a| {
+                        radius_authorization::Attribute {
+                            kind: a.kind,
+                            value: a.value.clone(),
+                        }
+                        .key()
+                    })
+                    .collect();
+                for value in extra {
+                    let key = value.key();
+                    if occupied.contains(&key) {
+                        return Ok(None);
+                    }
+                    attrs.push(Attribute {
+                        kind: value.kind,
+                        value: value.value,
+                    });
+                }
+                let disconnect = desired.attributes.settings.timer(desired.timeout_seconds).1;
+                let action = u32::from(!disconnect);
+                if attrs.iter().filter(|a| a.kind == 27).count() != 1
+                    || attrs.iter().any(|a| {
+                        (a.kind == 27 && a.value != desired.timeout_seconds.to_be_bytes())
+                            || (a.kind == 29 && a.value != action.to_be_bytes())
+                    })
+                {
+                    // A custom recipe must express the authorization retained
+                    // in its proof; an ACK cannot validate a different timer.
+                    return Ok(None);
+                }
+                if !attrs.iter().any(|a| a.kind == 29) {
+                    attrs.push(Attribute::integer(29, action));
                 }
             }
         }

@@ -166,6 +166,14 @@ The VLAN selected by assignment, in the range 1–4094.
 
 A later admission failure can prevent it from being sent. This does not prove an AP applied the VLAN or a device renewed its address.
 
+--- field object.radiusd.assignment.fingerprint
+type: str
+
+SHA-256 of the selected VLAN and complete compiled authorization settings.
+This identifies logical settings and equipment encodings without publishing
+their values. A later admission failure can prevent delivery; it does not
+establish that network equipment enforced the settings.
+
 --- field object.radiusd.reply
 type: str
 
@@ -289,6 +297,7 @@ field: object.radiusd.elapsed-ms optional
 field: object.radiusd.retransmissions optional
 field: object.radiusd.assignment.rule.id optional
 field: object.radiusd.assignment.profile.id optional
+field: object.radiusd.assignment.fingerprint optional
 field: object.radiusd.assignment.vlan optional
 field: object.radiusd.diagnostics.truncated optional
 
@@ -522,6 +531,7 @@ field: object.radiusd.config.fingerprint     optional
 field: object.radiusd.config.saved-fingerprint optional
 field: object.radiusd.assignment.rule.id     optional
 field: object.radiusd.assignment.profile.id  optional
+field: object.radiusd.assignment.fingerprint optional
 field: object.radiusd.assignment.vlan        optional
 field: object.radiusd.reply                  optional
 field: object.radiusd.diagnostics.truncated  optional

@@ -21,7 +21,7 @@ Wi-Fi sessions. See the [technical reference](docs/learn/1--peios.shelf/peios.pr
 
 The administration window requires Rust 1.98.1 or later, matching Peios SDK
 headers and libraries, and libgxwi. Its canonical Cargo replacement gives the
-older GXWI clients the same Peios bindings as the daemon. With those libraries
+SD editor the same Peios bindings as the daemon. With those libraries
 on the compiler and runtime search paths:
 
 ```sh
@@ -73,21 +73,24 @@ You can instead supply an existing qualified `eapol_test` executable.
 Direct component targets, without any packaging:
 
 ```sh
-pekit test -j 2 unit clippy doctests
-pekit build -j 2 test_server
-pekit build -j 2 radiusd
+pekit test --strict -j 2 unit integration management policy accounting clippy doctests
+pekit build --strict -j 2 test_server radiusd radius_cli radius
+pekit test --strict -j 2 native native_management administration native_clippy native_management_clippy administration_clippy
 ```
 
 The raw executable paths are reported by `pekit build`. Pass the harness to the
 interoperability runner. No target builds an image, kernel or `pkgs/` package.
 
-The `radius` raw target includes the window. The `accounting` test target
-covers the ledger crate. Accounting qualification uses Cargo; the Pekit path
-through bundled SQLite needs separate qualification. Native Pekit builds
-encounter older SDK/authd pins inside dependency libraries' own build graphs;
-those pins need aligning separately. The Cargo native builds above are
-qualified with matching raw libraries. Do not bypass a Pekit pin mismatch or
-select arbitrary library outputs.
+The `radius_cli` raw target includes native terminal administration; `radius`
+also includes the window. The `accounting` target exercises the ledger with
+bundled SQLite, while `native_management` covers its native adapters. The
+`policy` target covers the shared PNP adapter.
+
+Cargo and Pekit select matching immutable SDK, authentication and GXWI inputs.
+Unpublished dependency commits must already be available in the local build
+cache until they are published. Do not bypass a Pekit pin mismatch or select
+arbitrary library outputs. Final PPK packaging remains separate work in
+`pkgs/`; the commands above do not invoke it.
 
 ## Administration
 

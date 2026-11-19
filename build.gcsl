@@ -6,7 +6,14 @@ import "github.com/peios/peios-rs" as peios_rs
 import build libauth from "github.com/peios/authd"
 
 def crates() -> rust.RustWorkspace {
-    = rust.workspace(dir("."), dependencies())
+    = rust.workspace(dir("."), dependencies(), crates = kernel_settings())
+}
+
+# The vendored policy crates read shared semantic sources outside their own
+# directories. Declare that tree for each isolated compilation.
+def kernel_settings() -> List<rust.CrateSettings> {
+    let kernel = [{at = "vendor/kernel"; place = dir("vendor/kernel")}]
+    = for each in ["pnp-core", "peios-uapi"] { = {package = each; data = kernel} }
 }
 
 # Cargo's replaced packages are resolution records, not compiled inputs. The
@@ -47,6 +54,7 @@ def native_crates(window: Bool = false) -> rust.RustWorkspace {
     = rust.workspace(
         dir("."), dependencies(),
         crates = [
+            ...kernel_settings(),
             ...peios_rs.crate_settings(),
             ...gui,
             {
@@ -63,6 +71,9 @@ def native_crates(window: Bool = false) -> rust.RustWorkspace {
 }
 
 def build radiusd() { = rust.bin(native_crates(), "radiusd", features = ["native"]) }
+
+# Terminal administration without the optional desktop client library.
+def build radius_cli() { = rust.bin(native_crates(), "radius", features = ["native"]) }
 
 # The same program provides terminal administration and the GXWI window.
 def build radius() { = rust.bin(native_crates(window = true), "radius", features = ["window"]) }

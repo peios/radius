@@ -466,14 +466,14 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 [[package]]
 name = "gxwi"
 version = "0.0.7"
-source = "git+https://github.com/peios/gxwi.git?rev=820f5403c2431796908f0472baca6356bf9b5272#820f5403c2431796908f0472baca6356bf9b5272"
+source = "git+https://github.com/peios/gxwi.git?rev=3178855691c3a93fe6ee6fc7e0d8a30a07964db9#3178855691c3a93fe6ee6fc7e0d8a30a07964db9"
 dependencies = [
  "axum",
  "gxwi-abi",
  "hyper",
  "hyper-util",
  "libc",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e)",
+ "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
  "serde",
  "serde_json",
  "tokio",
@@ -483,7 +483,7 @@ dependencies = [
 [[package]]
 name = "gxwi-abi"
 version = "0.0.7"
-source = "git+https://github.com/peios/gxwi.git?rev=820f5403c2431796908f0472baca6356bf9b5272#820f5403c2431796908f0472baca6356bf9b5272"
+source = "git+https://github.com/peios/gxwi.git?rev=3178855691c3a93fe6ee6fc7e0d8a30a07964db9#3178855691c3a93fe6ee6fc7e0d8a30a07964db9"
 
 [[package]]
 name = "gxwi-sd-editor"

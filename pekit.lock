@@ -52,7 +52,7 @@
       "prefix": "github.com/peios/gxwi",
       "git": "https://github.com/peios/gxwi",
       "dir": "",
-      "rev": "dd54c32e6b7450726fd1e362986a623a1dd15b0f"
+      "rev": "3178855691c3a93fe6ee6fc7e0d8a30a07964db9"
     }
   ],
   "libraries": [
@@ -102,8 +102,8 @@
       "path": "github.com/peios/gxwi",
       "git": "https://github.com/peios/gxwi",
       "dir": "",
-      "commit": "dd54c32e6b7450726fd1e362986a623a1dd15b0f",
-      "tree": "6d23683793662962d14025bbde47bc74834ef895e2e5cbf95d6eb0a7051d9a67"
+      "commit": "3178855691c3a93fe6ee6fc7e0d8a30a07964db9",
+      "tree": "334e8cfb108006916cea6932503354d27976468fac93cb0dfefd75052317fbe2"
     },
     {
       "path": "github.com/peios/peios-rs",

@@ -13,8 +13,12 @@ It creates no user token or local logon session.
 Build the raw executable, without packaging or rebuilding the kernel:
 
 ```sh
-pekit build -j 2 radiusd
+pekit build --strict -j 2 radiusd radius_cli radius
 ```
+
+`radius_cli` includes native terminal administration; `radius` includes the
+same commands and the optional GXWI window. These raw component targets do
+not invoke final PPK packaging in `pkgs/`.
 
 The native Cargo feature links the matching public `libauth.so.1` and
 `libpeios.so.0`. The Pekit target supplies those libraries and SDK

@@ -43,14 +43,24 @@ The fixture uses explicit test credentials and never contacts authd.
 ## Component checks
 
 ```sh
-pekit test -j 2 unit clippy doctests
-pekit build -j 2 test_server
+pekit test --strict -j 2 unit integration management policy accounting clippy doctests
+pekit build --strict -j 2 test_server radiusd radius_cli radius
+pekit test --strict -j 2 native native_management administration native_clippy native_management_clippy administration_clippy
 ```
 
 These are raw component targets. They do not package files or build a
-kernel or image. The host Cargo equivalents are documented in the
-repository README. The Rust checks exercise malformed/truncated packets,
-duplicate attributes, conversation quotas, idle and overall deadlines,
+kernel or image. `radius_cli` builds terminal administration with native
+support; `radius` also includes the GXWI window. The native targets supply
+matching pinned SDK, authentication and desktop libraries. Cargo and Pekit
+must select the same source revision for each imported component; do not
+bypass a reported mismatch. Before dependency commits are published, local
+qualification needs those exact commits in the build cache.
+
+The host Cargo equivalents are documented in the repository README. Native
+host tests do not replace guest qualification: tests marked as requiring a
+disposable Peios guest remain ignored on the host. The Rust checks exercise
+malformed and truncated packets, duplicate attributes, conversation quotas,
+idle and overall deadlines,
 binding changes, one-shot admission and rejection without key delivery.
 
 ## Native session controls

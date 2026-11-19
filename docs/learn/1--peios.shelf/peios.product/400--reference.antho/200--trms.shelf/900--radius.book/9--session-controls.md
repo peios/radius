@@ -120,9 +120,11 @@ In the observed iPhone trial, the address eventually changed to the VLAN 20
 subnet after Disconnect and fresh authentication. On the return to no
 override, the phone still displayed its old address after five minutes.
 Explicitly assigning the main VLAN also failed to produce a new address and
-connectivity was lost. Automatic DHCP renewal on VLAN changes is therefore
-not qualified by this test. A successful Disconnect and new password proof
-do not establish that the client has usable IP configuration.
+connectivity was lost. Manually toggling Wi-Fi restored an address on the
+main subnet. Automatic DHCP renewal on VLAN changes is therefore not qualified
+by this test. A successful Disconnect and new password proof do not establish
+that the client has usable IP configuration. AP forwarding and client DHCP
+behavior were not captured, so the precise cause remains unverified.
 
 ## Automatic behavior
 

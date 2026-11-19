@@ -70,6 +70,8 @@ fn legacy_profile_defaults_and_invalid_selector_definitions() {
         .unwrap();
     assert!(attrs.iter().any(|a| a.kind == 4));
     assert!(attrs.iter().any(|a| a.kind == 32));
+    assert!(profile.proxy_state_nonce);
+    assert_eq!(profile.identifier_reuse_seconds, 300);
     for invalid in [
         serde_json::json!([]),
         serde_json::json!(["identifier", "identifier"]),
@@ -77,5 +79,12 @@ fn legacy_profile_defaults_and_invalid_selector_definitions() {
     ] {
         value["nas_selectors"] = invalid;
         assert!(Profile::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+    for window in [0, 86401] {
+        let invalid = Profile {
+            identifier_reuse_seconds: window,
+            ..Default::default()
+        };
+        assert!(invalid.validate().is_err());
     }
 }

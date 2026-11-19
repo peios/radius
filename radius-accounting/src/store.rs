@@ -1,10 +1,10 @@
 //! One owner commits accounting facts, interpretation and budget evidence.
 use crate::{
-    Error, Result,
     model::{Grant, Observation, Receipt, Session, Settings, State},
-    quota::{Balance, Budget, Dimension, interval_usage},
+    quota::{interval_usage, Balance, Budget, Dimension},
+    Error, Result,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-const SCHEMA: i64 = 2;
+const SCHEMA: i64 = 3;
 const APPLICATION: i64 = 0x52414441;
 type PriorReceipt = (String, Option<String>, String, i64, Vec<u8>);
 
@@ -78,6 +78,8 @@ pub struct Command {
     pub secret_fingerprint: Vec<u8>,
     #[serde(default)]
     pub port: u16,
+    #[serde(default = "crate::dynamic::identifier_window")]
+    pub identifier_reuse_seconds: u32,
     #[serde(default)]
     pub history: Vec<CommandStep>,
     pub id: String,
@@ -179,7 +181,7 @@ impl Store {
         let version: i64 = self
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if (app != 0 && app != APPLICATION) || !matches!(version, 0 | 1 | SCHEMA) {
+        if (app != 0 && app != APPLICATION) || !matches!(version, 0 | 1 | 2 | SCHEMA) {
             return Err(Error::Configuration(
                 "foreign or unsupported ledger schema".into(),
             ));
@@ -225,6 +227,29 @@ impl Store {
         // Version 2 adds independent live reevaluation state. Historical JSON
         // records decode without proof; never infer a baseline during upgrade.
         tx.execute_batch("CREATE TABLE IF NOT EXISTS reconciliations(session TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,data BLOB NOT NULL);")?;
+        // Version 3 retains wire allocation independently of command/session
+        // retention and projection rebuilds. Never rewind it on a clock step.
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS dynamic_wire_clock(scope TEXT PRIMARY KEY,slot INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS dynamic_wire_ids(scope TEXT NOT NULL,identifier INTEGER NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(scope,identifier));")?;
+        if version < 3 {
+            let commands: Vec<Command> = read_json(&tx, "SELECT data FROM commands")?;
+            for command in commands {
+                let (Some(target), Ok(timestamp)) = (
+                    command.target.as_ref(),
+                    crate::wire::dynamic_timestamp(&command.packet),
+                ) else {
+                    continue;
+                };
+                if command.port == 0 {
+                    continue;
+                }
+                let scope = target.source.to_string();
+                let identifier = i64::from(command.packet[1]);
+                let at = i64::from(timestamp);
+                tx.execute("INSERT INTO dynamic_wire_clock VALUES('machine',?) ON CONFLICT(scope) DO UPDATE SET slot=max(slot,excluded.slot)",params![at*256+identifier])?;
+                tx.execute("INSERT INTO dynamic_wire_ids VALUES(?,?,?) ON CONFLICT(scope,identifier) DO UPDATE SET at=max(at,excluded.at)",params![scope,identifier,at])?;
+            }
+        }
         if version < 2 {
             tx.execute_batch("DROP INDEX IF EXISTS one_pending_disconnect;")?;
         }
@@ -618,6 +643,7 @@ impl Store {
             packet: vec![],
             secret_fingerprint: vec![],
             port: 0,
+            identifier_reuse_seconds: crate::dynamic::identifier_window(),
             history: vec![],
             id: crate::id()?,
             session: session.into(),
@@ -765,6 +791,7 @@ impl Store {
             packet: vec![],
             secret_fingerprint: vec![],
             port: 0,
+            identifier_reuse_seconds: crate::dynamic::identifier_window(),
             history: vec![],
         };
         self.connection.execute(
@@ -860,10 +887,71 @@ impl Store {
                 return Err(Error::Integrity);
             }
         }
-        self.connection.execute(
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if command.state == "sent" {
+            if !(1..=86400).contains(&command.identifier_reuse_seconds) {
+                return Err(Error::Malformed);
+            }
+            let timestamp = i64::from(crate::wire::dynamic_timestamp(&command.packet)?);
+            if current.state == "sent" {
+                // A retransmission reuses the exact durable request, including
+                // its first-send time and key/destination fence.
+                if current.packet != command.packet
+                    || current.first_sent_ms != command.first_sent_ms
+                    || current.secret_fingerprint != command.secret_fingerprint
+                    || current.port != command.port
+                    || current.identifier_reuse_seconds != command.identifier_reuse_seconds
+                {
+                    return Err(Error::Integrity);
+                }
+            } else {
+                let target = command.target.as_ref().ok_or(Error::Malformed)?;
+                let scope = target.source.to_string();
+                let id = i64::from(command.packet[1]);
+                let slot = timestamp * 256 + id;
+                let prior: Option<i64> = tx
+                    .query_row(
+                        "SELECT slot FROM dynamic_wire_clock WHERE scope='machine'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let used: Option<i64> = tx
+                    .query_row(
+                        "SELECT at FROM dynamic_wire_ids WHERE scope=? AND identifier=?",
+                        params![scope, id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if prior.is_some_and(|old| slot <= old)
+                    || used.is_some_and(|old| {
+                        timestamp < old + i64::from(command.identifier_reuse_seconds)
+                    })
+                {
+                    let mut deferred = current.clone();
+                    deferred.validation_error =
+                        Some("waiting for a fresh RADIUS identifier or clock recovery".into());
+                    tx.execute(
+                        "UPDATE commands SET data=? WHERE id=?",
+                        params![serde_json::to_vec(&deferred)?, deferred.id],
+                    )?;
+                    tx.commit()?;
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "dynamic identifier reserved",
+                    )));
+                }
+                tx.execute("INSERT INTO dynamic_wire_clock VALUES('machine',?) ON CONFLICT(scope) DO UPDATE SET slot=excluded.slot",params![slot])?;
+                tx.execute("INSERT INTO dynamic_wire_ids VALUES(?,?,?) ON CONFLICT(scope,identifier) DO UPDATE SET at=excluded.at",params![scope,id,timestamp])?;
+            }
+        }
+        tx.execute(
             "UPDATE commands SET state=?,data=? WHERE id=?",
             params![command.state, serde_json::to_vec(command)?, command.id],
         )?;
+        tx.commit()?;
         Ok(())
     }
     pub fn maintain(&mut self, now: i64) -> Result<()> {

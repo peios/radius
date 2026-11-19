@@ -532,13 +532,16 @@ fn prepare(command: &mut Command, profile: &dynamic::Profile, id: u8, secret: &[
             Ok(Some(mut attrs)) => {
                 // Opaque nonsecret entropy prevents identical authenticators
                 // if a packet Identifier is reused in the same second.
-                let Ok(nonce) = radius_accounting::id() else {
-                    return;
-                };
-                attrs.push(Attribute {
-                    kind: 33,
-                    value: nonce.into_bytes(),
-                });
+                if profile.proxy_state_nonce {
+                    let Ok(nonce) = radius_accounting::id() else {
+                        return;
+                    };
+                    attrs.push(Attribute {
+                        kind: 33,
+                        value: nonce.into_bytes(),
+                    });
+                }
+                command.identifier_reuse_seconds = profile.identifier_reuse_seconds;
                 if let Ok(packet) = wire::dynamic_request(
                     if command.action == Action::Disconnect {
                         wire::DISCONNECT_REQUEST

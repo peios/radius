@@ -245,6 +245,29 @@ fn response(
 pub fn disconnect(identifier: u8, attrs: &[Attribute], secret: &[u8]) -> Result<Vec<u8>> {
     dynamic_request(DISCONNECT_REQUEST, identifier, attrs, secret)
 }
+/// Metadata used by the durable send fence. Packet integrity is produced by
+/// the encoder; no profile may remove Message-Authenticator or timestamp.
+pub fn dynamic_timestamp(bytes: &[u8]) -> Result<u32> {
+    let code = *bytes.first().ok_or(Error::Malformed)?;
+    if !matches!(code, DISCONNECT_REQUEST | COA_REQUEST) {
+        return Err(Error::Malformed);
+    }
+    let (canonical, attrs, ma) = frame(bytes, code)?;
+    if canonical.len() != bytes.len() || ma.is_none() {
+        return Err(Error::Malformed);
+    }
+    let stamps: Vec<_> = attrs.iter().filter(|a| a.kind == 55).collect();
+    match stamps.as_slice() {
+        [a] if a.value.len() == 4 => {
+            let timestamp = u32::from_be_bytes(a.value.as_slice().try_into().unwrap());
+            if timestamp == 0 {
+                return Err(Error::Malformed);
+            }
+            Ok(timestamp)
+        }
+        _ => Err(Error::Malformed),
+    }
+}
 pub fn dynamic_request(
     code: u8,
     identifier: u8,
@@ -328,6 +351,48 @@ pub fn dynamic_result(
 #[cfg(test)]
 mod dynamic_tests {
     use super::*;
+    #[test]
+    fn timestamp_and_identifier_bind_replies_without_proxy_state() {
+        let secret = b"no-proxy-state-fixture";
+        let mut attrs = vec![
+            Attribute {
+                kind: 32,
+                value: b"nas".to_vec(),
+            },
+            Attribute {
+                kind: 44,
+                value: b"session".to_vec(),
+            },
+            Attribute::integer(55, 100),
+        ];
+        let first = dynamic_request(DISCONNECT_REQUEST, 0, &attrs, secret).unwrap();
+        let ack = response(
+            DISCONNECT_ACK,
+            0,
+            &first[4..20].try_into().unwrap(),
+            &[],
+            secret,
+            true,
+        )
+        .unwrap();
+        assert_eq!(dynamic_timestamp(&first).unwrap(), 100);
+        assert!(dynamic_result(&ack, &first, secret, true).unwrap().0);
+        attrs[2] = Attribute::integer(55, 400);
+        let later = dynamic_request(DISCONNECT_REQUEST, 0, &attrs, secret).unwrap();
+        assert_ne!(&first[4..20], &later[4..20]);
+        assert!(dynamic_result(&ack, &later, secret, true).is_err());
+        // Duplicate timestamps cannot be used as an ambiguity/entropy source.
+        attrs.push(Attribute::integer(55, 400));
+        assert!(dynamic_timestamp(
+            &dynamic_request(DISCONNECT_REQUEST, 0, &attrs, secret).unwrap()
+        )
+        .is_err());
+        attrs.retain(|a| a.kind != 55);
+        assert!(dynamic_timestamp(
+            &dynamic_request(DISCONNECT_REQUEST, 0, &attrs, secret).unwrap()
+        )
+        .is_err());
+    }
     #[test]
     fn error_causes_must_match_the_response_semantics() {
         let secret = b"error-cause-fixture";

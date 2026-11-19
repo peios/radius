@@ -76,7 +76,7 @@ enum Work {
     CommandHistory(String, SyncSender<Result<Vec<Command>>>),
     CommandRequest(String, String, SyncSender<Result<Option<Command>>>),
     Dispatch(SyncSender<Result<Vec<(Command, Session)>>>),
-    CommandResult(Command, SyncSender<Result<()>>),
+    CommandResult(Box<Command>, SyncSender<Result<()>>),
     Rebuild(String, SyncSender<Result<()>>),
     Stop(SyncSender<()>),
 }
@@ -191,7 +191,7 @@ impl Handle {
         self.submit(Work::Dispatch)
     }
     pub fn command_result(&self, c: Command) -> Result<Completion<()>> {
-        self.submit(|tx| Work::CommandResult(c, tx))
+        self.submit(|tx| Work::CommandResult(Box::new(c), tx))
     }
     pub fn rebuild(&self, actor: String) -> Result<Completion<()>> {
         self.submit(|tx| Work::Rebuild(actor, tx))

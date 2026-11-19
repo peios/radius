@@ -1,7 +1,7 @@
 //! Real ledger owner and UDP transport, without a host Peios kernel or live NAS.
 use super::{
     accounting::{Service, Snapshot},
-    dynamic::{Authority, reconcile},
+    dynamic::{reconcile, Authority},
     dynamic_commands::Commands,
 };
 use crate::{
@@ -371,9 +371,31 @@ fn tick_until_packet(
 }
 #[test]
 fn restart_retransmits_exact_packet_and_wrong_peer_cannot_acknowledge() {
+    for proxy_state_nonce in [true, false] {
+        restart_wire_mode(proxy_state_nonce);
+    }
+}
+fn restart_wire_mode(proxy_state_nonce: bool) {
     let nas = UdpSocket::bind("127.0.0.1:0").unwrap();
     nas.set_nonblocking(true).unwrap();
-    let f = fixture(nas.local_addr().unwrap().port());
+    let mut f = fixture(nas.local_addr().unwrap().port());
+    let mut configured = (*f.service.snapshot().unwrap()).clone();
+    let profile = "66666666-6666-4666-8666-666666666666";
+    configured.config.dynamic.profiles.insert(
+        profile.into(),
+        radius_accounting::dynamic::Profile {
+            proxy_state_nonce,
+            ..Default::default()
+        },
+    );
+    configured
+        .config
+        .dynamic
+        .clients
+        .insert(CLIENT.into(), Some(profile.into()));
+    let authority = f.service.authority();
+    f.service = Service::fixture(configured, f.service.ledger.clone());
+    f.service.publish_authority(authority);
     let snapshot = f.service.snapshot().unwrap();
     worker::wait(
         f.service
@@ -395,6 +417,14 @@ fn restart_retransmits_exact_packet_and_wrong_peer_cannot_acknowledge() {
     let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").unwrap());
     let mut first = Commands::new();
     let packet = tick_until_packet(&mut first, &f, &socket, &nas);
+    let mut offset = 20;
+    let mut has_proxy_state = false;
+    while offset < packet.len() {
+        has_proxy_state |= packet[offset] == 33;
+        offset += packet[offset + 1] as usize;
+    }
+    assert_eq!(has_proxy_state, proxy_state_nonce);
+    assert!(wire::dynamic_timestamp(&packet).is_ok());
     drop(first);
     let mut restarted = Commands::new();
     let retry = tick_until_packet(&mut restarted, &f, &socket, &nas);

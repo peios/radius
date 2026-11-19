@@ -8,6 +8,9 @@ const SECRET: &[u8] = b"accounting-test-only-secret";
 const USER: &str = "S-1-5-21-1-2-3-1001";
 const GROUP: &str = "S-1-5-21-1-2-3-2001";
 
+#[path = "cases/dynamic_wire.rs"]
+mod dynamic_wire;
+
 fn proof(g: &Grant, vlan: Option<u16>, revision: u8) -> radius_accounting::dynamic::Proof {
     use radius_accounting::dynamic::*;
     Proof {

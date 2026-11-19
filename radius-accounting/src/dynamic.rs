@@ -239,6 +239,12 @@ pub struct Profile {
     /// on the exact target; the session selector is never optional.
     #[serde(default = "all_nas_selectors")]
     pub nas_selectors: Vec<NasSelector>,
+    /// Some NAS implementations reject Proxy-State in dynamic requests.
+    /// Durable identifier reservations remain mandatory in either mode.
+    #[serde(default = "yes")]
+    pub proxy_state_nonce: bool,
+    #[serde(default = "identifier_window")]
+    pub identifier_reuse_seconds: u32,
     /// Clearing a VLAN override has no universal standard CoA encoding.
     #[serde(default)]
     pub clear_vlan: Vec<Encoding>,
@@ -270,6 +276,9 @@ fn all_nas_selectors() -> Vec<NasSelector> {
 fn yes() -> bool {
     true
 }
+pub fn identifier_window() -> u32 {
+    300
+}
 impl Default for Profile {
     fn default() -> Self {
         Self {
@@ -278,6 +287,8 @@ impl Default for Profile {
             station_selector: true,
             require_station: false,
             nas_selectors: all_nas_selectors(),
+            proxy_state_nonce: true,
+            identifier_reuse_seconds: identifier_window(),
             clear_vlan: vec![],
             recipes: vec![
                 Recipe {
@@ -331,6 +342,7 @@ impl Profile {
             || self.recipes.is_empty()
             || self.recipes.len() > 3
             || self.clear_vlan.len() > 16
+            || !(1..=86400).contains(&self.identifier_reuse_seconds)
             || (self.require_station && !self.station_selector)
             || self.nas_selectors.is_empty()
             || self.nas_selectors.len() > 3

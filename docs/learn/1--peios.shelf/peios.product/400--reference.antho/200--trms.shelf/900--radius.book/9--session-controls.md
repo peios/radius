@@ -61,11 +61,38 @@ enabled fallback. A profile that advertises reauthentication must declare
 `fresh_proof: true` after device qualification. RFC 5176 Authorize-Only is
 reauthorization and cannot serve as that declaration.
 
-Every request carries Message-Authenticator, Event-Timestamp, and an opaque
-nonce. Responses must match the packet family, identifier, peer, and request
+Every request carries Message-Authenticator and Event-Timestamp. Profiles
+default to `"proxy_state_nonce": true`, adding an opaque Proxy-State nonce.
+Set it to false only for a NAS that rejects that attribute; durable request
+allocation still applies. Responses must match the packet family, identifier,
+peer, and request
 authenticator. Requiring a response Message-Authenticator is configurable for
 NAS compatibility. Do not advertise a device-specific recipe as qualified
 until it has produced a fresh authentication exchange on that device.
+
+Before a new request can be transmitted, the ledger reserves its timestamp
+and identifier atomically with the prepared packet. The pair never moves
+backwards on the machine, even after a daemon restart, accounting
+rebuild, history expiration or clock rollback. Retransmissions reuse the
+original committed packet. An old ACK cannot authenticate a later request
+using a different reserved pair.
+
+`identifier_reuse_seconds` controls the NAS duplicate-detection window,
+defaults to 300, and accepts 1–86400 seconds. Match it to the device's window.
+At most 256 new requests can be sent to one NAS address within that
+window; retries reuse their original reservation. Exhaustion or clock
+rollback leaves requests pending, with a waiting reason, until a valid pair
+is available. Other NAS addresses have independent reuse windows. The global
+pair allocator permits up to 256 new requests per second across all NAS
+addresses, preventing reuse when a destination or shared secret changes.
+No timestamp
+is moved into the future to work around exhaustion. This follows the
+identifier and replay constraints in [RFC 5176](https://datatracker.ietf.org/doc/html/rfc5176#section-6.3).
+
+The allocator is retained in ledger format 3 and seeded from stored packets
+when upgrading formats 1 or 2. Take a full offline state backup before the
+upgrade; earlier daemons cannot open the upgraded ledger. Ordinary evidence
+rebuild and retention do not erase the allocator.
 
 ## Automatic behavior
 

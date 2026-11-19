@@ -34,6 +34,7 @@ the draft.
 | Server identity | Named certificate chain and matching private key |
 | Access profile | Complete assignment settings, including an optional VLAN |
 | Assignment rule | Policy-owned conditions, action, priority, and exceptions |
+| Session control profile | Reusable device capabilities for Disconnect and CoA |
 
 Objects have immutable GUIDs. Names are editable labels and can be duplicated;
 an ambiguous CLI name requires a GUID. References always use GUIDs. Renaming
@@ -51,6 +52,7 @@ radius profile list
 radius identity list
 radius access-profile list
 radius rule list
+radius dynamic-profile list
 radius config check
 ```
 
@@ -63,6 +65,13 @@ and does not accept `--json`.
 See [Access Assignment](~peios/reference/radius/access-assignment) for profile
 selection, rule editing, explicit defaults and hypothetical policy
 explanations.
+
+The Accounting section exposes exact-session Disconnect, fresh
+reauthentication, authorization updates, and command history. Each action has
+an independent Accounting security descriptor right; configuration-write
+access alone does not grant control of established sessions. See
+[Session Controls](~peios/reference/radius/session-controls) for activation,
+device capabilities, fallback permissions, and outcome interpretation.
 
 ## Initial setup
 

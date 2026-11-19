@@ -4,6 +4,7 @@
 //! cannot create verified subjects; only a previously persisted local grant can.
 #![forbid(unsafe_code)]
 
+pub mod dynamic;
 pub mod model;
 pub mod profile;
 pub mod quota;

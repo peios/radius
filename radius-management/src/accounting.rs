@@ -21,8 +21,10 @@ pub const USAGE: u32 = 4;
 pub const DISCONNECT: u32 = 8;
 pub const CORRECT: u32 = 16;
 pub const RAW: u32 = 32;
-pub const ALL: u32 = 63;
-pub const DEFAULT_SECURITY: &str = "O:SYG:SYD:(A;;0x3f;;;SY)(A;;0x3f;;;BA)";
+pub const REAUTHENTICATE: u32 = 64;
+pub const UPDATE_AUTHORIZATION: u32 = 128;
+pub const ALL: u32 = 255;
+pub const DEFAULT_SECURITY: &str = "O:SYG:SYD:(A;;0xff;;;SY)(A;;0xff;;;BA)";
 /// Registry name, portable name, boolean. Values larger than DWORD use exact decimal REG_SZ.
 pub const KNOBS: &[(&str, &str, bool)] = &[
     ("AccountingBatchMilliseconds", "batch_ms", false),
@@ -90,6 +92,15 @@ pub enum Request {
     Disconnect {
         id: String,
     },
+    Control {
+        #[serde(default)]
+        request_id: String,
+        id: String,
+        action: radius_accounting::dynamic::Action,
+    },
+    Reconciliation {
+        id: String,
+    },
     Commands {
         id: String,
     },
@@ -117,6 +128,7 @@ pub struct Peer {
 }
 #[derive(Clone)]
 pub struct Policy {
+    pub reauthenticate_seconds: u32,
     pub enabled: bool,
     pub ssid: Option<Vec<u8>>,
     pub required: bool,
@@ -125,6 +137,7 @@ pub struct Policy {
 }
 #[derive(Clone)]
 pub struct Configuration {
+    pub dynamic: crate::dynamic::Configuration,
     pub settings: Settings,
     pub listeners: Vec<SocketAddr>,
     pub peers: BTreeMap<String, Peer>,
@@ -258,12 +271,13 @@ pub fn prepare(s: &Stored) -> Result<Configuration, String> {
             _ => {
                 return Err(fail(
                     "OnAccountingUnavailable expects deny-new or allow-new",
-                ))
+                ));
             }
         };
         policies.insert(
             r.id.clone(),
             Policy {
+                reauthenticate_seconds: r.number("ReauthenticateSeconds").unwrap_or(3600),
                 enabled: r.enabled(),
                 ssid: r.text("SSID").map(|v| v.as_bytes().to_vec()),
                 required: flag("AccountingRequired")?,
@@ -354,6 +368,7 @@ pub fn prepare(s: &Stored) -> Result<Configuration, String> {
         return Err(fail("too many accounting objects"));
     }
     Ok(Configuration {
+        dynamic: crate::dynamic::prepare(s)?,
         settings,
         listeners,
         peers,
@@ -367,6 +382,7 @@ pub fn prepare(s: &Stored) -> Result<Configuration, String> {
 }
 pub fn usage_subject(principal: &str, policy: &str) -> Grant {
     Grant {
+        proof: None,
         reference: Vec::new(),
         client: String::new(),
         policy: policy.into(),

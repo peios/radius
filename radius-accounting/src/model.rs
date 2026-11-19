@@ -1,6 +1,6 @@
 use crate::{
-    wire::{Attribute, Request},
     Error, Result,
+    wire::{Attribute, Request},
 };
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -222,6 +222,8 @@ pub fn same_station(a: &[u8], b: &[u8]) -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Grant {
+    #[serde(default)]
+    pub proof: Option<crate::dynamic::Proof>,
     pub reference: Vec<u8>,
     pub client: String,
     pub policy: String,
@@ -234,6 +236,10 @@ pub struct Grant {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
+    #[serde(default)]
+    pub observed: Option<crate::dynamic::Observed>,
+    #[serde(default)]
+    pub proof: Option<crate::dynamic::Proof>,
     pub id: String,
     pub client: String,
     pub nas: Vec<u8>,

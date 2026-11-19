@@ -59,6 +59,10 @@ interface entry points and introduces no syscall requirement.
 See [Access Assignment](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/7--access-assignment.md)
 for explicit default rules, VLAN configuration, typed claims and Explain.
 
+See [Session Controls](docs/learn/1--peios.shelf/peios.product/400--reference.antho/200--trms.shelf/900--radius.book/9--session-controls.md)
+for exact-session Disconnect and CoA, device profiles, automatic reevaluation,
+independent permissions, evidence and coordinated store migration.
+
 The test-tool builder downloads the pinned upstream wpa_supplicant 2.12 archive,
 checks its SHA-256 and builds only `eapol_test`, using two jobs by default. It
 requires a C compiler, Make and OpenSSL development files. The source build is

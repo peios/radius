@@ -117,9 +117,11 @@ for repair; radiusd does not continue granting under an older policy.
 The final authentication decision uses current policy. Semantic changes
 invalidate cached acceptance replies. Existing Wi-Fi connections receive
 another assignment when they next authenticate, including automatic
-reauthentication. The AP controls how it applies a changed VLAN. Policy edits
-do not themselves send Disconnect or CoA requests; accounting enforcement
-retains its separate Disconnect behavior.
+reauthentication. The AP controls how it applies a changed VLAN. Configurable
+[Session Controls](~peios/reference/radius/session-controls) can act after successful
+activation; VLAN-change Disconnect defaults on when automatic controls and
+accounting are enabled. The exact issued baseline, current policy, and precise
+session selectors determine which occurrences are affected.
 
 A VLAN change does not assign the client's IP configuration. A client can
 retain its previous DHCP lease after reauthentication and lose connectivity

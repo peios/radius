@@ -6,7 +6,7 @@ use radiusd::{
     driver::Driver,
     native::{
         accounting::AccountingAuth,
-        configuration::{watch, Update},
+        configuration::{Update, watch},
         events::Sink,
     },
 };
@@ -55,6 +55,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut sink = Sink::new(Vec::new(), actor)?;
     let accounting = radius_management::native::accounting::Service::start()?;
     let mut driver: Option<Driver<AccountingAuth>> = None;
+    let mut active_configuration = None;
     let status = Arc::new(Mutex::new(radius_management::status::Status::default()));
     radius_management::native::control::serve(status.clone())?;
     // Readiness means the local status service is ready. Invalid configuration
@@ -74,6 +75,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         for _ in 0..4 {
             match updates.try_recv() {
                 Ok(Update::Pending) => {
+                    active_configuration = None;
+                    accounting.publish_authority(None);
                     if let Some(d) = driver.as_mut() {
                         d.pause();
                     }
@@ -82,6 +85,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Ok(Update::Invalid { saved, issues }) => {
+                    active_configuration = None;
+                    accounting.publish_authority(None);
                     if let Some(d) = driver.as_mut() {
                         d.pause();
                     }
@@ -112,6 +117,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     });
                     match activated {
                         Ok(sockets) => {
+                            active_configuration = Some(config.clone());
                             sink.configure_diagnostics(config.diagnostics.clone());
                             sink.sockets = sockets;
                             if let Ok(mut s) = status.lock() {
@@ -126,6 +132,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             announced = Some(true);
                         }
                         Err(error) => {
+                            active_configuration = None;
+                            accounting.publish_authority(None);
                             if let Some(d) = driver.as_mut() {
                                 d.pause();
                             }
@@ -147,8 +155,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    return Err("configuration worker stopped".into())
+                    return Err("configuration worker stopped".into());
                 }
+            }
+        }
+        if let Some(config) = &active_configuration {
+            if accounting
+                .authority()
+                .is_none_or(|a| a.revision != config.saved_fingerprint)
+            {
+                radiusd::native::dynamic::publish(&accounting, config.clone());
             }
         }
         if let Some(driver) = driver.as_mut() {

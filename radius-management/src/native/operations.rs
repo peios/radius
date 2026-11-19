@@ -1,6 +1,6 @@
 //! Shared edits used by both frontends. Registry checks the actual caller.
 use super::{credentials, registry};
-use crate::model::{Field, Kind, Record, Stored, Value, Values, ROOT, SCHEMA};
+use crate::model::{Field, Kind, ROOT, Record, SCHEMA, Stored, Value, Values};
 use peios::registry::{CreateFlags, Data, Key, KeyAccess, OpenFlags, Transaction};
 use std::io;
 
@@ -18,7 +18,7 @@ pub fn initialize() -> io::Result<()> {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "RADIUS configuration already exists",
-            ))
+            ));
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
@@ -104,6 +104,12 @@ pub fn parse_field(kind: Kind, name: &str, value: &str) -> io::Result<Value> {
 }
 
 pub fn parse_setting(name: &str, text: &str) -> io::Result<Value> {
+    if crate::dynamic::KNOBS.iter().any(|(n, _, _)| *n == name) {
+        return text
+            .parse()
+            .map(Value::Number)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "expected DWORD"));
+    }
     if crate::diagnostics::KNOBS
         .iter()
         .any(|(n, _, _, _)| *n == name)
@@ -131,12 +137,20 @@ pub fn parse_setting(name: &str, text: &str) -> io::Result<Value> {
             });
     }
     match name {
+        "DynamicAuthorizationFallback" => Ok(Value::List(
+            text.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )),
         "Listen" | "AccountingListen" => {
             Ok(Value::List(text.split(',').map(str::to_owned).collect()))
         }
-        "StatusSecurity" | "AccountingSecurity" | "AccountingSettings" => {
-            Ok(Value::Text(text.into()))
-        }
+        "StatusSecurity"
+        | "AccountingSecurity"
+        | "AccountingSettings"
+        | "DynamicAuthorizationSettings" => Ok(Value::Text(text.into())),
         "AccountingEnabled" | "AccountingSelfService" => text
             .parse()
             .map(Value::Number)
@@ -310,7 +324,7 @@ pub fn submit(
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "CertificateFiles is required",
-                ))
+                ));
             }
         };
         let key = match values.get("PrivateKeyFile") {
@@ -319,7 +333,7 @@ pub fn submit(
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "PrivateKeyFile is required",
-                ))
+                ));
             }
         };
         values.extend(credentials::identity_values(&mut staged, &chain, &key)?);

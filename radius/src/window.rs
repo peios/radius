@@ -1,6 +1,6 @@
 //! GXWI forms over the same local management operations as the CLI.
 use gxwi::settings::{self, Glyph, Kind as Button, Nav, Section, Tile, Width};
-use gxwi::{escape, App, Facts, Fields, Live, Surface, Value as EventValue};
+use gxwi::{App, Facts, Fields, Live, Surface, Value as EventValue, escape};
 use radius_management::{
     model::{Field, Kind, Record, Stored, Value, Values},
     native::{configuration, credentials, operations, registry, service},
@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 
 gxwi::icon!(b"dev.peios.radius");
 mod diagnostics;
+mod session_control;
 type Action = Box<dyn FnOnce() -> io::Result<Outcome> + Send>;
 fn usage_history_graph(history: &[serde_json::Value]) -> String {
     let mut points: Vec<_> = history
@@ -54,7 +55,11 @@ fn usage_history_graph(history: &[serde_json::Value]) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    format!("<figure><svg viewBox=\"0 0 600 160\" role=\"img\" aria-label=\"Cumulative received bytes (solid) and sent bytes (dashed) across retained reports\"><polyline fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" points=\"{}\"/><polyline fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-dasharray=\"6 4\" points=\"{}\"/></svg><figcaption>Cumulative bytes: received (solid), sent (dashed). Missing reports and counter resets can leave gaps. Scale: 0 to {maximum} bytes.</figcaption></figure>",series("input"),series("output"))
+    format!(
+        "<figure><svg viewBox=\"0 0 600 160\" role=\"img\" aria-label=\"Cumulative received bytes (solid) and sent bytes (dashed) across retained reports\"><polyline fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" points=\"{}\"/><polyline fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-dasharray=\"6 4\" points=\"{}\"/></svg><figcaption>Cumulative bytes: received (solid), sent (dashed). Missing reports and counter resets can leave gaps. Scale: 0 to {maximum} bytes.</figcaption></figure>",
+        series("input"),
+        series("output")
+    )
 }
 enum Outcome {
     Saved(Record),
@@ -404,7 +409,7 @@ impl Window {
         page
     }
 }
-const SECTIONS: [(&str, &str, Glyph); 12] = [
+const SECTIONS: [(&str, &str, Glyph); 13] = [
     ("overview", "Overview", Glyph::Server),
     ("diagnostics", "Diagnostics", Glyph::Server),
     ("client", "Clients", Glyph::Globe),
@@ -414,6 +419,7 @@ const SECTIONS: [(&str, &str, Glyph); 12] = [
     ("accounting", "Accounting", Glyph::Server),
     ("quota", "Allowances", Glyph::Shield),
     ("accounting-profile", "Accounting Profiles", Glyph::Globe),
+    ("dynamic-profile", "Session Control Profiles", Glyph::Globe),
     ("access-profile", "Access Profiles", Glyph::Globe),
     ("rule", "Assignment Rules", Glyph::Shield),
     ("explain", "Explain Policy", Glyph::Shield),
@@ -433,17 +439,28 @@ fn section_tile(section: &str) -> Tile {
 }
 fn section_about(section: &str) -> &'static str {
     match section {
-        "diagnostics"=>"Recorded authentication progress and outcomes, subject to your event permissions.",
+        "diagnostics" => {
+            "Recorded authentication progress and outcomes, subject to your event permissions."
+        }
         "client" => "Devices that send authentication requests to this server.",
         "policy" => "Who may connect, and which authentication profile each network uses.",
         "profile" => "Reusable authentication methods and server identities.",
         "identity" => "Certificates this server presents when devices connect.",
-        "accounting"=>"Recorded sessions, usage and accounting health on this machine.",
-        "quota"=>"Independent limits for users and groups. Every applicable allowance must permit access.",
-        "accounting-profile"=>"Declarative mappings for accounting attributes reported by network devices.",
-        "access-profile"=>"Reusable network access settings selected by policy rules.",
-        "rule"=>"PNP-style rules and nested exceptions selecting one complete access profile.",
-        "explain"=>"Test saved assignment rules with hypothetical facts. This does not authenticate anyone or grant access.",
+        "accounting" => "Recorded sessions, usage and accounting health on this machine.",
+        "quota" => {
+            "Independent limits for users and groups. Every applicable allowance must permit access."
+        }
+        "accounting-profile" => {
+            "Declarative mappings for accounting attributes reported by network devices."
+        }
+        "dynamic-profile" => {
+            "Reusable device capabilities and encodings for precise session controls."
+        }
+        "access-profile" => "Reusable network access settings selected by policy rules.",
+        "rule" => "PNP-style rules and nested exceptions selecting one complete access profile.",
+        "explain" => {
+            "Test saved assignment rules with hypothetical facts. This does not authenticate anyone or grant access."
+        }
         _ => "RADIUS authentication and admission on this machine.",
     }
 }
@@ -471,6 +488,9 @@ fn field_text(value: &Value) -> String {
     }
 }
 fn fill(record: &Record, fields: &mut Fields) {
+    if record.kind == Kind::Policy {
+        session_control::fill_policy(record, fields);
+    }
     if record.kind == Kind::Rule {
         for (i, (key, value)) in rule_conditions(record).into_iter().enumerate() {
             let (fact, operator) = key.rsplit_once('.').unwrap_or((key, "Equal"));
@@ -567,6 +587,8 @@ fn label(field: &str) -> &str {
         "AccountingRequired" => "Require Accounting (0 or 1)",
         "DisconnectPort" => "Disconnect Port",
         "AccountingProfile" => "Accounting Profile",
+        "DynamicAuthorizationProfile" => "Session Control Profile",
+        "SessionControl" => "Automatic Session Controls",
         "AccountingSecurity" => "Accounting Permissions (blank to inherit)",
         "ServiceKind" => "Service Kind",
         "Definition" => "Profile Definition (JSON)",
@@ -581,6 +603,7 @@ fn reference(field: &str) -> Option<Kind> {
         "AuthenticationProfile" => Some(Kind::Profile),
         "ServerIdentity" => Some(Kind::Identity),
         "AccountingProfile" => Some(Kind::AccountingProfile),
+        "DynamicAuthorizationProfile" => Some(Kind::DynamicProfile),
         _ => None,
     }
 }
@@ -735,9 +758,13 @@ impl Window {
             rows.push_str(&settings::fact("GUID", &record.id, true));
         }
         if record.kind != Kind::Identity {
-            rows.push_str(&settings::row("Enabled","Disabled objects deny affected authentication; established access is not immediately disconnected.",&settings::select("Enabled","Enabled",&[("1".into(),"Enabled".into()),("0".into(),"Disabled".into())],may)));
+            rows.push_str(&settings::row("Enabled","Disabled objects deny affected authentication. Established sessions follow the configured automatic session controls.",&settings::select("Enabled","Enabled",&[("1".into(),"Enabled".into()),("0".into(),"Disabled".into())],may)));
         }
         for (field, ty) in record.kind.fields() {
+            if *field == "SessionControl" {
+                rows.push_str(&session_control::policy_form(may));
+                continue;
+            }
             if matches!(*field, "SecretFile" | "ConnectSecurity") {
                 continue;
             }
@@ -853,7 +880,17 @@ impl Window {
             } else {
                 text(field, label(field), "text", may)
             };
-            let about=match *field{"Addresses"=>"One IP address or canonical CIDR prefix per line.","Policies"=>"Only these policies may be selected by this client.","CertificateFiles"=>"Import PEM or DER files from this Peios machine, one path per line. Leave blank to keep the current certificate.","PrivateKeyFile"=>"Import the matching PEM or DER private key; the key is stored in a protected file.",_=>""};
+            let about = match *field {
+                "Addresses" => "One IP address or canonical CIDR prefix per line.",
+                "Policies" => "Only these policies may be selected by this client.",
+                "CertificateFiles" => {
+                    "Import PEM or DER files from this Peios machine, one path per line. Leave blank to keep the current certificate."
+                }
+                "PrivateKeyFile" => {
+                    "Import the matching PEM or DER private key; the key is stored in a protected file."
+                }
+                _ => "",
+            };
             rows.push_str(&settings::row(label(field), about, &control));
         }
         if record.kind == Kind::Rule {
@@ -1231,6 +1268,25 @@ impl Window {
                     "accounting-disconnect",
                     &[("id", id)],
                     Button::Danger,
+                    !self.busy && row["controls"]["disconnect"] == true,
+                ));
+                for (label, action) in [
+                    ("Reauthenticate…", "reauthenticate"),
+                    ("Update Access…", "update-authorization"),
+                ] {
+                    actions.push_str(&settings::button(
+                        label,
+                        "accounting-control",
+                        &[("id", id), ("action", action)],
+                        Button::Plain,
+                        !self.busy && row["controls"][action] == true,
+                    ));
+                }
+                actions.push_str(&settings::button(
+                    "Reevaluation",
+                    "accounting-reconciliation",
+                    &[("id", id)],
+                    Button::Plain,
                     !self.busy,
                 ));
                 body.push_str(&settings::row(
@@ -1314,6 +1370,7 @@ impl Window {
             if let Some(history) = detail["history"].as_array() {
                 body.push_str(&usage_history_graph(history));
             }
+            body.push_str(&session_control::evidence(detail));
             page.push_str(&settings::group("Session Details", &body, ""));
         }
         if let Some(balances) = self.accounting.get("usage").and_then(|v| v.as_array()) {
@@ -1373,6 +1430,7 @@ impl Window {
             settings::submit("Show Usage", Button::Plain, !self.busy)
         ));
         page.push_str(&format!(r#"<form fx-submit="accounting-settings">{}{}</form>"#,settings::group("Accounting Settings",&format!("{}{}{}",settings::row("Enabled","The private ledger directory and UDP port permission must be provisioned before activation.",&settings::select("accounting-enabled","Enabled",&[("0".into(),"Disabled".into()),("1".into(),"Enabled".into())],!self.busy)),settings::row("Listen Addresses","Comma-separated UDP socket addresses.",&text("accounting-listen","Listen Addresses","text",!self.busy)),settings::row("Advanced Setting","Registry setting name and value; the CLI uses the same validator.",&format!("{}{}",text("accounting-setting","Setting Name","text",!self.busy),text("accounting-value","Setting Value","text",!self.busy)))),""),settings::submit("Save Settings",Button::Primary,!self.busy)));
+        page.push_str(&session_control::global_form(!self.busy));
         page
     }
     fn permissions(&mut self, connect: bool) {
@@ -1698,12 +1756,39 @@ impl Live for Window {
             "accounting-session"=>{if let Some(id)=value.get("id").and_then(|v|v.as_str()){let id=id.to_owned();self.launch(Box::new(move||{
                 use radius_management::{accounting::Request as R,native::accounting::query};
                 let session=query(R::Session{id:id.clone()})?;
-                let history=query(R::History{id,limit:200}).ok();
-                Ok(Outcome::AccountingView("detail",serde_json::json!({"session":session,"history":history})))
+                let history=query(R::History{id:id.clone(),limit:200}).ok();
+                let reconciliation=query(R::Reconciliation{id:id.clone()}).ok();
+                let commands=query(R::Commands{id}).ok();
+                Ok(Outcome::AccountingView("detail",serde_json::json!({"session":session,"history":history,"reconciliation":reconciliation,"commands":commands})))
             }));}},
-            "accounting-disconnect"=>{if let Some(id)=value.get("id").and_then(|v|v.as_str()){let id=id.to_owned();self.request("Ask the network device to disconnect this session? Acknowledgement does not confirm the session has ended.".into(),Box::new(move||{radius_management::native::accounting::query(radius_management::accounting::Request::Disconnect{id})?;Ok(Outcome::Done("Disconnect queued. Refresh accounting to observe the result.".into()))}));}},
+            "accounting-disconnect"=>{if let Some(id)=value.get("id").and_then(|v|v.as_str()){let id=id.to_owned();self.request("Ask the network device to disconnect this session? Acknowledgement does not confirm the session has ended.".into(),Box::new(move||{radius_management::native::accounting::query(radius_management::accounting::Request::Control{request_id:String::new(),id,action:radius_accounting::dynamic::Action::Disconnect})?;Ok(Outcome::Done("Disconnect queued. Refresh accounting to observe the result.".into()))}));}},
+            "accounting-control" => {
+                if let (Some(id), Some(action)) = (value.get("id").and_then(|v|v.as_str()), value.get("action").and_then(|v|v.as_str())) {
+                    let action = match action { "reauthenticate" => radius_accounting::dynamic::Action::Reauthenticate, "update-authorization" => radius_accounting::dynamic::Action::UpdateAuthorization, _ => return };
+                    let id = id.to_owned();
+                    self.request("Send this session control request? Any configured fallback requires its own permission and may disconnect the device. Acceptance does not confirm fresh authentication or address renewal.".into(), Box::new(move || {
+                        let command = radius_management::native::accounting::query(radius_management::accounting::Request::Control { request_id:String::new(), id, action })?;
+                        Ok(Outcome::Inspected(serde_json::to_string_pretty(&command).unwrap_or_default()))
+                    }));
+                }
+            },
+            "accounting-reconciliation" => {
+                if let Some(id) = value.get("id").and_then(|v|v.as_str()) {
+                    let id = id.to_owned();
+                    self.launch(Box::new(move || {
+                        let result = radius_management::native::accounting::query(radius_management::accounting::Request::Reconciliation { id })?;
+                        Ok(Outcome::Inspected(serde_json::to_string_pretty(&result).unwrap_or_default()))
+                    }));
+                }
+            },
             "accounting-usage"=>{let principal=fields.get("usage-principal").to_owned();let policy=fields.get("usage-policy").to_owned();self.launch(Box::new(move||Ok(Outcome::AccountingView("usage",radius_management::native::accounting::query(radius_management::accounting::Request::Usage{principal,policy})?))));},
             "accounting-settings"=>{let mut patch=Values::new();for (field,name) in [("accounting-enabled","AccountingEnabled"),("accounting-listen","AccountingListen")]{match operations::parse_setting(name,fields.get(field)){Ok(v)=>{patch.insert(name.into(),v);},Err(e)=>{self.said=Some(Err(e.to_string()));return;}}}let name=fields.get("accounting-setting");if !name.is_empty(){if !name.starts_with("Accounting"){self.said=Some(Err("Choose an accounting setting.".into()));return;}match operations::parse_setting(name,fields.get("accounting-value")){Ok(v)=>{patch.insert(name.into(),v);},Err(e)=>{self.said=Some(Err(e.to_string()));return;}}}self.launch(Box::new(move||{operations::save_settings(&patch)?;Ok(Outcome::Done("Accounting settings saved; activation is checked separately.".into()))}));},
+            "session-control-settings" => {
+                match session_control::global_value(fields) {
+                    Ok(patch) => self.launch(Box::new(move || { operations::save_settings(&patch)?; Ok(Outcome::Done("Session controls saved; check activation status.".into())) })),
+                    Err(error) => self.said = Some(Err(error.to_string())),
+                }
+            },
             "initialize"=>self.request("Create the initial RADIUS configuration? Existing configuration will not be overwritten.".into(),Box::new(||{operations::initialize()?;Ok(Outcome::Done("Configuration initialized.".into()))})),
             "section" => {
                 if let Some(section) = value
@@ -1718,6 +1803,7 @@ impl Live for Window {
                     self.inspection = None;
                     fields.set("shared-secret", "");
                     if section.0=="accounting"{
+                        session_control::fill_global(&self.stored, fields);
                         fields.set("usage-policy","*");
                         let settings=self.stored.as_ref().ok().map(|s|&s.settings);
                         fields.set("accounting-enabled",if settings.and_then(|v|v.get("AccountingEnabled"))==Some(&Value::Number(1)){"1"}else{"0"});
@@ -1830,6 +1916,10 @@ impl Live for Window {
                 }
                 let mut import = false;
                 for (field, ty) in record.kind.fields() {
+                    if *field == "SessionControl" {
+                        match session_control::policy_value(&record, fields) { Ok(value) => { patch.insert((*field).into(), value); }, Err(error) => { self.said = Some(Err(error.to_string())); return; } }
+                        continue;
+                    }
                     if matches!(*field, "SecretFile" | "ConnectSecurity") {
                         continue;
                     }
@@ -1997,22 +2087,24 @@ pub fn open() -> i32 {
         w.surface = weak.clone();
         fields.set("listeners", &listeners(&w.stored));
     });
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(3));
-        let Some(surface) = weak.upgrade() else {
-            return;
-        };
-        let stored = read();
-        let overview = overview();
-        surface.update(|w, fields| {
-            if let Some(monitor) = &w.diagnostic_monitor {
-                w.diagnostics = monitor.snapshot();
-            }
-            if !w.busy {
-                w.heard(stored, fields);
-                w.overview = overview;
-            }
-        });
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            let Some(surface) = weak.upgrade() else {
+                return;
+            };
+            let stored = read();
+            let overview = overview();
+            surface.update(|w, fields| {
+                if let Some(monitor) = &w.diagnostic_monitor {
+                    w.diagnostics = monitor.snapshot();
+                }
+                if !w.busy {
+                    w.heard(stored, fields);
+                    w.overview = overview;
+                }
+            });
+        }
     });
     match app.run() {
         Ok(()) => 0,
@@ -2175,7 +2267,10 @@ mod tests {
             }
             if let Ok(directory) = std::env::var("RADIUS_RENDER_DIRECTORY") {
                 std::fs::create_dir_all(&directory).unwrap();
-                let document=format!("<!doctype html><html><head><meta name=viewport content=\"width=device-width,initial-scale=1\"><style>{}</style></head><body>{html}</body></html>",settings::STYLE);
+                let document = format!(
+                    "<!doctype html><html><head><meta name=viewport content=\"width=device-width,initial-scale=1\"><style>{}</style></head><body>{html}</body></html>",
+                    settings::STYLE
+                );
                 std::fs::write(
                     std::path::Path::new(&directory).join(format!("{section}.html")),
                     document,

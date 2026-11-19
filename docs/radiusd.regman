@@ -582,13 +582,13 @@ Individual Accounting values override the corresponding JSON fields. AccountingE
 --- machine\software\radius\settings accountingsecurity
 canonical: Machine\Software\Radius\Settings AccountingSecurity
 type: REG_SZ or REG_BINARY
-default: O:SYG:SYD:(A;;0x3f;;;SY)(A;;0x3f;;;BA)
+default: O:SYG:SYD:(A;;0xff;;;SY)(A;;0xff;;;BA)
 valid: SDDL or validated self-relative SD with owner
 applies: live
 
 Default authority for protected accounting operations.
 
-Rights are Read 0x1, Personal 0x2, Usage 0x4, Disconnect 0x8, Correct 0x10, and Raw 0x20. Policy descriptors can delegate a narrower scope. Orphaned history uses this descriptor.
+Rights are Read 0x1, Personal 0x2, Usage 0x4, Disconnect 0x8, Correct 0x10, Raw 0x20, Reauthenticate 0x40 and Update Authorization 0x80. Policy descriptors can delegate a narrower scope. Orphaned history uses this descriptor. Existing custom descriptors do not gain the new rights automatically.
 
 --- machine\software\radius\settings accountingselfservice
 canonical: Machine\Software\Radius\Settings AccountingSelfService
@@ -828,7 +828,7 @@ default: 3799
 valid: 1–65535
 applies: live
 
-UDP destination port for administrative and allowance-triggered Disconnect.
+UDP destination port for Disconnect and CoA commands.
 
 The destination address comes from the recorded source and must remain admitted by the same client prefix.
 
@@ -952,3 +952,226 @@ applies: live
 Bounded declarative accounting normalization rules.
 
 Rules select standard or vendor attributes, decode bytes or unsigned integers, map bounded numeric values, and supply or replace named normalized fields. Targets and dictionary selectors must be unique. Executable plugins are not supported.
+
+--- machine\software\radius\settings dynamicauthorizationenabled
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationEnabled
+type: REG_DWORD
+default: 1 with accounting, otherwise 0
+valid: 0 or 1
+applies: live
+
+Enable automatic session reconciliation; explicitly enabling it requires
+accounting.
+
+--- machine\software\radius\settings dynamicauthorizationeventhints
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationEventHints
+type: REG_DWORD
+default: 1
+valid: 0 or 1
+applies: live
+
+Use authorized lpsd account and credential change events as hints for fresh
+reads.
+
+--- machine\software\radius\settings dynamicauthorizationintervalseconds
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationIntervalSeconds
+type: REG_DWORD
+default: 30
+valid: 1–86400
+applies: live
+
+Periodic reconciliation interval, including missed events and authority
+recovery.
+
+--- machine\software\radius\settings dynamicauthorizationbatchsize
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationBatchSize
+type: REG_DWORD
+default: 128
+valid: 1–200
+applies: live
+
+Maximum sessions considered in one reconciliation batch.
+
+--- machine\software\radius\settings dynamicauthorizationbudgetmilliseconds
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationBudgetMilliseconds
+type: REG_DWORD
+default: 1000
+valid: 10–10000
+applies: live
+
+Work budget per batch. One bounded identity or ledger read can finish after
+this budget.
+
+--- machine\software\radius\settings dynamicauthorizationidentitytimeoutmilliseconds
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationIdentityTimeoutMilliseconds
+type: REG_DWORD
+default: 500
+valid: 10–10000
+applies: live
+
+Deadline for an individual authd identity lookup.
+
+--- machine\software\radius\settings dynamicauthorizationretrycount
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationRetryCount
+type: REG_DWORD
+default: 4
+valid: 1–8
+applies: live
+
+Maximum transmissions of one dynamic authorization step.
+
+--- machine\software\radius\settings dynamicauthorizationretryseconds
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationRetrySeconds
+type: REG_DWORD
+default: 1
+valid: 1–60
+applies: live
+
+Initial exponential retry backoff in seconds.
+
+--- machine\software\radius\settings dynamicauthorizationcommandlifetimeseconds
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationCommandLifetimeSeconds
+type: REG_DWORD
+default: 60
+valid: 10–300
+applies: live
+
+Maximum age after first transmission before an outstanding command remains
+uncertain.
+
+--- machine\software\radius\settings dynamicauthorizationmaxinflight
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationMaxInFlight
+type: REG_DWORD
+default: 64
+valid: 1–128
+applies: live
+
+Bound concurrent dynamic authorization flights and their single validation
+worker.
+
+--- machine\software\radius\settings dynamicauthorizationrequireresponseauthenticator
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationRequireResponseAuthenticator
+type: REG_DWORD
+default: 0
+valid: 0 or 1
+applies: live
+
+Require Message-Authenticator in Disconnect and CoA replies. Request
+authentication is always supplied.
+
+--- machine\software\radius\settings dynamicauthorizationdisconnectonvlanchange
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationDisconnectOnVlanChange
+type: REG_DWORD
+default: 1
+valid: 0 or 1
+applies: live
+
+Disconnect relevant established occurrences when their effective VLAN
+changes.
+
+--- machine\software\radius\settings dynamicauthorizationrevokeaccess
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationRevokeAccess
+type: REG_DWORD
+default: 1
+valid: 0 or 1
+applies: live
+
+Disconnect after confirmed account disablement, deletion or current policy
+denial.
+
+--- machine\software\radius\settings dynamicauthorizationreauthenticateonpasswordchange
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationReauthenticateOnPasswordChange
+type: REG_DWORD
+default: 1
+valid: 0 or 1
+applies: live
+
+Request fresh proof after password revision changes or its binding becomes
+ineligible. NT maintenance does not rotate it.
+
+--- machine\software\radius\settings dynamicauthorizationupdateautomatically
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationUpdateAutomatically
+type: REG_DWORD
+default: 0
+valid: 0 or 1
+applies: live
+
+Enable automatic updates of supported current authorization settings.
+Disabling VLAN-change Disconnect alone does not enable updates.
+
+--- machine\software\radius\settings dynamicauthorizationunavailablegraceseconds
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationUnavailableGraceSeconds
+type: REG_DWORD
+default: 0
+valid: 0–2592000
+applies: live
+
+Zero keeps connections during unavailable identity evaluation. A positive
+grace permits Disconnect and persists across restarts.
+
+--- machine\software\radius\settings dynamicauthorizationsettings
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationSettings
+type: REG_SZ
+default: (absent)
+valid: bounded JSON object matching dynamic authorization Settings
+applies: live
+
+Grouped dynamic authorization controls.
+
+Individual DynamicAuthorization values override these JSON fields. Unknown
+JSON fields are refused. Per-policy SessionControl overrides inherit the
+resulting defaults.
+
+--- machine\software\radius\settings dynamicauthorizationfallback
+canonical: Machine\Software\Radius\Settings DynamicAuthorizationFallback
+type: REG_MULTI_SZ
+default: (empty)
+valid: reauthenticate, disconnect, or both in that order
+applies: live
+
+Fallback actions after an explicit unsupported capability.
+
+An empty list reports failure. Timeouts and ordinary NAK errors do not permit
+fallback. Every configured manual fallback needs its own caller right.
+
+--- machine\software\radius\clients\<client> dynamicauthorizationprofile
+canonical: Machine\Software\Radius\Clients\<client> DynamicAuthorizationProfile
+type: REG_SZ
+default: (absent)
+valid: enabled dynamic-profile GUID or empty
+applies: live
+
+Reusable dynamic authorization capability and encoding profile.
+
+An absent reference uses the generic RFC 5176 profile. It does not advertise
+fresh authentication or a universal VLAN-reset encoding.
+
+--- machine\software\radius\dynamicauthorizationprofiles\<profile> definition
+canonical: Machine\Software\Radius\DynamicAuthorizationProfiles\<profile> Definition
+type: REG_SZ
+default: (required)
+valid: version 1 JSON, at most 65536 bytes, 3 recipes, 16 attributes per recipe
+applies: live
+
+Declarative device capabilities, selectors and bounded output encodings.
+
+Core code owns mandatory NAS/session selection, protocol integrity, nonces,
+retries, authorization and durable outcomes. No executable plugins or raw
+credential attributes are accepted. Reauthentication requires a qualified
+fresh-proof declaration. Authorize-Only is not fresh authentication.
+
+--- machine\software\radius\accesspolicies\<policy> sessioncontrol
+canonical: Machine\Software\Radius\AccessPolicies\<policy> SessionControl
+type: REG_SZ
+default: (inherit global dynamic authorization defaults)
+valid: JSON object with optional enforcement members
+applies: live after successful activation
+
+Per-policy automatic controls, fallback and identity-outage grace.
+
+Members are vlan_disconnect, revoke_access, password_reauthenticate,
+update_authorization, unavailable_grace_seconds and fallback. Omitted members
+inherit. Null grace keeps connections. A positive grace is 1–2592000 seconds.
+Fallback permits reauthenticate and/or disconnect in that order. Unknown
+members prevent activation. Automatic actions require accounting, verified
+identity and precise occurrence selectors.

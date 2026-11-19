@@ -1,6 +1,6 @@
 //! Nonblocking integration coordinator. Backend operations and supplied-subject
 //! decisions are adapter-owned; no username lookup reconstructs an identity.
-use crate::config::{called_ssid, Config, Network};
+use crate::config::{Config, Network, called_ssid};
 use radius_core::{Admission, Binding, Client, Engine, Outcome, Reply, Verification};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 
@@ -48,6 +48,7 @@ pub enum Progress<S> {
     Failed(Reason),
 }
 pub struct AdmissionContext<'a> {
+    pub vlan: Option<u16>,
     pub id: [u8; 16],
     pub client_id: &'a str,
     pub network_id: &'a str,
@@ -215,7 +216,7 @@ impl<B: Backend> Driver<B> {
                     listener,
                     peer,
                     Some(&client.name),
-                )
+                );
             }
         };
         let selected = if let Some(id) = request.state {
@@ -692,6 +693,7 @@ impl<B: Backend> Driver<B> {
                 match self.backend.accounting(
                     result.as_ref().unwrap(),
                     AdmissionContext {
+                        vlan,
                         id,
                         client_id: &client.name,
                         network_id,

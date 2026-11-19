@@ -1,6 +1,6 @@
 //! Stored configuration, including incomplete records that need repairing.
 use ring::{
-    digest::{digest, SHA256},
+    digest::{SHA256, digest},
     rand::{SecureRandom, SystemRandom},
 };
 use serde::{Deserialize, Serialize};
@@ -22,9 +22,10 @@ pub enum Kind {
     AccountingProfile,
     AccessProfile,
     Rule,
+    DynamicProfile,
 }
 impl Kind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Client,
         Self::Policy,
         Self::Profile,
@@ -33,6 +34,7 @@ impl Kind {
         Self::AccountingProfile,
         Self::AccessProfile,
         Self::Rule,
+        Self::DynamicProfile,
     ];
     pub fn collection(self) -> &'static str {
         match self {
@@ -44,6 +46,7 @@ impl Kind {
             Self::AccountingProfile => "AccountingProfiles",
             Self::AccessProfile => "AccessProfiles",
             Self::Rule => "Rules",
+            Self::DynamicProfile => "DynamicAuthorizationProfiles",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -56,6 +59,7 @@ impl Kind {
             "accounting-profile" => Some(Self::AccountingProfile),
             "access-profile" => Some(Self::AccessProfile),
             "rule" => Some(Self::Rule),
+            "dynamic-profile" => Some(Self::DynamicProfile),
             _ => None,
         }
     }
@@ -68,6 +72,7 @@ impl Kind {
                 ("Policies", List),
                 ("AccountingProfile", Text),
                 ("DisconnectPort", Number),
+                ("DynamicAuthorizationProfile", Text),
             ],
             Self::Policy => &[
                 ("SSID", Text),
@@ -78,6 +83,7 @@ impl Kind {
                 ("AccountingRequired", Number),
                 ("OnAccountingUnavailable", Text),
                 ("AccountingSecurity", Descriptor),
+                ("SessionControl", Text),
             ],
             Self::Profile => &[("AuthenticationMethods", List), ("ServerIdentity", Text)],
             Self::Identity => &[("CertificateFiles", List), ("PrivateKeyFile", Text)],
@@ -89,7 +95,7 @@ impl Kind {
                 ("Maximum", Text),
                 ("Disconnect", Number),
             ],
-            Self::AccountingProfile => &[("Definition", Text)],
+            Self::AccountingProfile | Self::DynamicProfile => &[("Definition", Text)],
             Self::AccessProfile => &[("VlanId", Number)],
             Self::Rule => &[
                 ("Policy", Text),
@@ -129,13 +135,17 @@ impl Kind {
             (self, name),
             (Self::AccessProfile, "VlanId")
                 | (Self::Rule, "Parent" | "Priority" | "Actions")
-                | (Self::Client, "AccountingProfile" | "DisconnectPort")
+                | (
+                    Self::Client,
+                    "AccountingProfile" | "DisconnectPort" | "DynamicAuthorizationProfile"
+                )
                 | (
                     Self::Policy,
                     "ServiceKind"
                         | "AccountingRequired"
                         | "OnAccountingUnavailable"
                         | "AccountingSecurity"
+                        | "SessionControl"
                 )
         )
     }
@@ -251,6 +261,12 @@ impl Record {
                 if let Some(id) = self.text("AccountingProfile").filter(|id| !id.is_empty()) {
                     references.push((Kind::AccountingProfile, id));
                 }
+                if let Some(id) = self
+                    .text("DynamicAuthorizationProfile")
+                    .filter(|id| !id.is_empty())
+                {
+                    references.push((Kind::DynamicProfile, id));
+                }
                 references
             }
             Kind::Policy if self.text("ServiceKind") == Some("accounting-only") => Vec::new(),
@@ -262,7 +278,10 @@ impl Record {
                 .text("ServerIdentity")
                 .map(|id| vec![(Kind::Identity, id)])
                 .unwrap_or_default(),
-            Kind::Identity | Kind::AccountingProfile | Kind::AccessProfile => Vec::new(),
+            Kind::Identity
+            | Kind::AccountingProfile
+            | Kind::AccessProfile
+            | Kind::DynamicProfile => Vec::new(),
             Kind::Rule => {
                 let mut refs = Vec::new();
                 if let Some(id) = self.text("Policy") {
@@ -550,6 +569,13 @@ impl Stored {
                     message: e,
                 });
             }
+        }
+        if let Err(message) = crate::dynamic::prepare(self) {
+            out.push(Issue {
+                object: "Settings".into(),
+                field: "DynamicAuthorizationSettings".into(),
+                message,
+            });
         }
         out
     }

@@ -37,13 +37,15 @@ usage: radius [--json] [command]
   accounting telemetry-init      provision the service metric namespace, preserving policy
   accounting status | sessions [POLICY-GUID]
     sessions options: --after GUID --revision N --limit N --principal SID --active
-  accounting session|history|disconnect SESSION-GUID
+  accounting session|history|disconnect|reauthenticate|update SESSION-GUID
+  accounting reconciliation SESSION-GUID
+  accounting disconnect|reauthenticate|update SESSION-GUID --request-id ID
   accounting related|commands SESSION-GUID
   accounting usage SID [POLICY-GUID]
   accounting annotate SESSION-GUID NOTE
   accounting correct-end SESSION-GUID UNIX-MILLISECONDS NOTE --confirm
   accounting rebuild --confirm   rebuild retained evidence without sending actions
-  client|policy|profile|identity|quota|accounting-profile|access-profile|rule list
+  client|policy|profile|identity|quota|accounting-profile|dynamic-profile|access-profile|rule list
   KIND show NAME-OR-GUID
   KIND create NAME [--set FIELD=VALUE] ...
   KIND set NAME-OR-GUID [--set FIELD=VALUE] ...
@@ -254,7 +256,36 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
                     principal: principal.into(),
                     policy: policy.into(),
                 },
-                ["disconnect", id] => R::Disconnect { id: id.into() },
+                ["disconnect", id] => R::Control {
+                    request_id: String::new(),
+                    id: id.into(),
+                    action: radius_accounting::dynamic::Action::Disconnect,
+                },
+                ["reauthenticate", id] => R::Control {
+                    request_id: String::new(),
+                    id: id.into(),
+                    action: radius_accounting::dynamic::Action::Reauthenticate,
+                },
+                ["update", id] => R::Control {
+                    request_id: String::new(),
+                    id: id.into(),
+                    action: radius_accounting::dynamic::Action::UpdateAuthorization,
+                },
+                ["reconciliation", id] => R::Reconciliation { id: id.into() },
+                [
+                    action @ ("disconnect" | "reauthenticate" | "update"),
+                    id,
+                    "--request-id",
+                    request_id,
+                ] => R::Control {
+                    request_id: request_id.into(),
+                    id: id.into(),
+                    action: match action {
+                        "disconnect" => radius_accounting::dynamic::Action::Disconnect,
+                        "reauthenticate" => radius_accounting::dynamic::Action::Reauthenticate,
+                        _ => radius_accounting::dynamic::Action::UpdateAuthorization,
+                    },
+                },
                 ["annotate", id, note] => R::Annotate {
                     id: id.into(),
                     note: note.into(),
@@ -361,11 +392,13 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
                 Kind::parse(kind).ok_or_else(|| usage("unknown object kind; run radius --help"))?;
             let stored = registry::read()?;
             match (*action, rest) {
-                ("list", []) => Ok(json!(stored
-                    .objects
-                    .iter()
-                    .filter(|r| r.kind == kind)
-                    .collect::<Vec<_>>())),
+                ("list", []) => Ok(json!(
+                    stored
+                        .objects
+                        .iter()
+                        .filter(|r| r.kind == kind)
+                        .collect::<Vec<_>>()
+                )),
                 ("create", [name, args @ ..]) => {
                     let record = operations::create(
                         kind,

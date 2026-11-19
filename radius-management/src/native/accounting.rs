@@ -11,6 +11,7 @@ use radius_accounting::{
     wire,
     worker::{self, Handle, View},
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::BTreeMap,
     io::{self, Read, Write},
@@ -22,7 +23,7 @@ use std::{
             net::{UnixListener, UnixStream},
         },
     },
-    sync::{mpsc, Arc, RwLock},
+    sync::{Arc, RwLock, mpsc},
     thread,
     time::Duration,
 };
@@ -74,9 +75,25 @@ pub struct Service {
     state: Arc<RwLock<Option<Arc<Snapshot>>>>,
     error: Arc<RwLock<Option<String>>>,
     queue_count: usize,
+    authority: Arc<RwLock<Option<super::dynamic::Authority>>>,
+    hint: Arc<AtomicU64>,
 }
 fn err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
+}
+#[derive(Debug)]
+struct ControlFailure {
+    code: &'static str,
+    message: &'static str,
+}
+impl std::fmt::Display for ControlFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message)
+    }
+}
+impl std::error::Error for ControlFailure {}
+fn control_failure(code: &'static str, message: &'static str) -> io::Error {
+    io::Error::other(ControlFailure { code, message })
 }
 pub fn verify_directory() -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -159,6 +176,17 @@ pub fn provision_directory() -> io::Result<()> {
     verify_directory()
 }
 impl Service {
+    #[cfg(test)]
+    pub(super) fn fixture(snapshot: Snapshot, ledger: Handle) -> Self {
+        Self {
+            queue_count: snapshot.config.settings.queue_count,
+            ledger,
+            state: Arc::new(RwLock::new(Some(Arc::new(snapshot)))),
+            error: Arc::new(RwLock::new(None)),
+            authority: Arc::new(RwLock::new(None)),
+            hint: Arc::new(AtomicU64::new(0)),
+        }
+    }
     pub fn start() -> io::Result<Self> {
         let initial = super::registry::read()
             .ok()
@@ -167,6 +195,8 @@ impl Service {
             .unwrap_or_default();
         let service = Self {
             queue_count: initial.queue_count,
+            authority: Arc::new(RwLock::new(None)),
+            hint: Arc::new(AtomicU64::new(0)),
             ledger: Handle::start_verified(
                 std::path::Path::new(DIRECTORY).join("ledger.db"),
                 initial,
@@ -177,15 +207,18 @@ impl Service {
             error: Arc::new(RwLock::new(None)),
         };
         serve(service.clone())?;
+        super::dynamic::start(service.clone())?;
         let (tx, updates) = mpsc::sync_channel(1);
         let watcher = service.clone();
         thread::Builder::new()
             .name("radius-accounting-config".into())
-            .spawn(move || loop {
-                if tx.send(watcher.load()).is_err() {
-                    return;
+            .spawn(move || {
+                loop {
+                    if tx.send(watcher.load()).is_err() {
+                        return;
+                    }
+                    thread::sleep(Duration::from_secs(1));
                 }
-                thread::sleep(Duration::from_secs(1));
             })?;
         let worker = service.clone();
         thread::Builder::new()
@@ -195,6 +228,77 @@ impl Service {
     }
     pub fn snapshot(&self) -> Option<Arc<Snapshot>> {
         self.state.read().ok()?.clone()
+    }
+    pub fn publish_authority(&self, authority: Option<super::dynamic::Authority>) {
+        if let Ok(mut active) = self.authority.write() {
+            *active = authority;
+        }
+    }
+    pub fn authority(&self) -> Option<super::dynamic::Authority> {
+        self.authority.read().ok()?.clone()
+    }
+    pub(super) fn hint(&self) -> u64 {
+        self.hint.load(Ordering::Relaxed)
+    }
+    pub(super) fn changed(&self) {
+        self.hint.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(super) fn transmit(
+        &self,
+        command: &radius_accounting::store::Command,
+        socket: &UdpSocket,
+        peer: SocketAddr,
+    ) -> io::Result<usize> {
+        // Keep activation and secret replacement fenced through this one
+        // nonblocking send; a checked clone alone could become stale.
+        let authority = self
+            .authority
+            .read()
+            .map_err(|_| err("authority lock unavailable"))?;
+        let state = self
+            .state
+            .read()
+            .map_err(|_| err("configuration lock unavailable"))?;
+        let snapshot = state
+            .as_ref()
+            .ok_or_else(|| err("configuration unavailable"))?;
+        if authority
+            .as_ref()
+            .is_none_or(|a| a.revision != command.configuration)
+            || snapshot.config.fingerprint != command.configuration
+        {
+            return Err(err("configuration superseded"));
+        }
+        let target = command
+            .target
+            .as_ref()
+            .ok_or_else(|| err("target missing"))?;
+        if target.source != peer.ip() || command.port != peer.port() {
+            return Err(err("target changed"));
+        }
+        let client = snapshot
+            .config
+            .peers
+            .values()
+            .flat_map(|client| {
+                client
+                    .addresses
+                    .iter()
+                    .filter(|p| p.contains(target.source))
+                    .map(move |p| (p.bits, client))
+            })
+            .max_by_key(|(bits, _)| *bits)
+            .map(|(_, client)| client)
+            .filter(|client| client.enabled && client.disconnect_port == peer.port())
+            .ok_or_else(|| err("client changed"))?;
+        let same_secret = snapshot.secrets.get(&client.id).is_some_and(|s| {
+            ring::digest::digest(&ring::digest::SHA256, s.as_slice()).as_ref()
+                == command.secret_fingerprint
+        });
+        if !same_secret {
+            return Err(err("client secret changed"));
+        }
+        socket.send_to(&command.packet, peer)
     }
     fn load(&self) -> io::Result<Snapshot> {
         let config = prepare(&super::registry::read()?).map_err(err)?;
@@ -229,7 +333,7 @@ impl Service {
         let mut fingerprint = Vec::new();
         let mut configuring: Option<worker::Completion<()>> = None;
         let mut bytes = [0u8; 65536];
-        let mut disconnects = super::accounting_disconnect::Disconnects::new();
+        let mut disconnects = super::dynamic_commands::Commands::new();
         loop {
             if let Ok(loaded) = updates.try_recv() {
                 let loaded = loaded.and_then(|mut next| {
@@ -365,7 +469,7 @@ impl Service {
             }
             if let Some(snapshot) = self.snapshot() {
                 if snapshot.ledger_ready {
-                    disconnects.tick(&self.ledger, &snapshot, &sockets);
+                    disconnects.tick(self, &snapshot, &sockets);
                 }
                 for socket in &sockets {
                     for _ in 0..32 {
@@ -374,7 +478,13 @@ impl Service {
                             Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                             Err(_) => break,
                         };
-                        if disconnects.response(socket, source, &bytes[..length], &self.ledger) {
+                        if disconnects.response(
+                            socket,
+                            source,
+                            &bytes[..length],
+                            self,
+                            snapshot.config.dynamic.settings.require_response_ma,
+                        ) {
                             continue;
                         }
                         if !snapshot.ledger_ready {
@@ -466,7 +576,12 @@ fn permitted(token: &Token, sd: &Value, right: u32) -> bool {
         AccessCheck::new(
             &sd,
             AccessMask::from_bits_retain(right),
-            GenericMapping::new(READ | PERSONAL | USAGE, DISCONNECT | CORRECT, READ, ALL),
+            GenericMapping::new(
+                READ | PERSONAL | USAGE,
+                DISCONNECT | CORRECT | REAUTHENTICATE | UPDATE_AUTHORIZATION,
+                READ,
+                ALL,
+            ),
         )
         .token(token.as_fd())
         .check()
@@ -483,7 +598,9 @@ fn view(token: &Token, s: &Snapshot, right: u32) -> View {
             .filter(|(_, p)| permitted(token, &p.accounting_security, right))
             .map(|(id, _)| id.clone())
             .collect(),
-        own_sid: if s.config.self_service && right & (DISCONNECT | CORRECT | RAW) == 0 {
+        own_sid: if s.config.self_service
+            && right & (DISCONNECT | CORRECT | RAW | REAUTHENTICATE | UPDATE_AUTHORIZATION) == 0
+        {
             token.user().ok().map(|s| s.to_string())
         } else {
             None
@@ -496,6 +613,7 @@ fn allowed(token: &Token, s: &Snapshot, row: &Session, right: u32) -> bool {
 fn redact(row: &mut Session, personal: bool, usage: bool) {
     if !personal {
         row.sid = None;
+        row.proof = None;
         row.groups.clear();
         row.name = None;
         row.username = None;
@@ -515,6 +633,45 @@ fn redact(row: &mut Session, personal: bool, usage: bool) {
         row.link_count = None;
     }
 }
+fn controls(token: &Token, snapshot: &Snapshot, row: &Session) -> serde_json::Value {
+    use radius_accounting::dynamic::{Action, Target};
+    let profile = snapshot.config.dynamic.profile(&row.client);
+    let ready = Target::from_session(row).is_ok();
+    let can = |action| {
+        let fallback = row
+            .policy
+            .as_ref()
+            .and_then(|p| snapshot.config.dynamic.policies.get(p))
+            .map(|p| super::dynamic::fallback_after(action, &p.fallback))
+            .unwrap_or_default();
+        ready
+            && allowed(token, snapshot, row, READ | crate::dynamic::right(action))
+            && fallback
+                .iter()
+                .all(|a| allowed(token, snapshot, row, READ | crate::dynamic::right(*a)))
+            && std::iter::once(action)
+                .chain(fallback)
+                .any(|a| profile.recipes.iter().any(|r| r.action == a))
+    };
+    serde_json::json!({"disconnect":can(Action::Disconnect),"reauthenticate":can(Action::Reauthenticate),"update-authorization":can(Action::UpdateAuthorization),"profile":profile.name})
+}
+fn command_view(
+    mut command: radius_accounting::store::Command,
+    personal: bool,
+) -> io::Result<serde_json::Value> {
+    command.packet.clear();
+    command.secret_fingerprint.clear();
+    if !personal {
+        command.target = None;
+        command.proof.clear();
+    }
+    let mut value = serde_json::to_value(command).map_err(err)?;
+    if let Some(value) = value.as_object_mut() {
+        value.remove("packet");
+        value.remove("secret_fingerprint");
+    }
+    Ok(value)
+}
 fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serde_json::Value> {
     if matches!(request, Request::Status) {
         let security = super::registry::read()
@@ -524,8 +681,9 @@ fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serd
         if !permitted(token, &security, READ) {
             return Err(err("accounting status denied"));
         }
+        let snapshot = service.snapshot();
         return Ok(
-            serde_json::json!({"version":1,"enabled":service.snapshot().is_some_and(|s|s.config.settings.enabled),"ledger":service.ledger.snapshot(),"configuration_error":service.error.read().ok().and_then(|e|e.clone())}),
+            serde_json::json!({"version":1,"enabled":snapshot.as_ref().is_some_and(|s|s.config.settings.enabled),"ledger":service.ledger.snapshot(),"configuration_error":service.error.read().ok().and_then(|e|e.clone()),"session_controls":snapshot.as_ref().map(|s|&s.config.dynamic.settings),"controls_active":snapshot.as_ref().is_some_and(|s|service.authority().is_some_and(|a|a.revision==s.config.fingerprint))}),
         );
     }
     let s = service
@@ -552,7 +710,7 @@ fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serd
             if !permitted(token, &s.config.security, READ) {
                 return Err(err("accounting status denied"));
             }
-            serde_json::json!({"version":1,"enabled":s.config.settings.enabled,"ledger":service.ledger.snapshot(),"configuration_error":service.error.read().ok().and_then(|e|e.clone())})
+            serde_json::json!({"version":1,"enabled":s.config.settings.enabled,"ledger":service.ledger.snapshot(),"configuration_error":service.error.read().ok().and_then(|e|e.clone()),"session_controls":s.config.dynamic.settings,"controls_active":service.authority().is_some_and(|a|a.revision==s.config.fingerprint)})
         }
         Request::Sessions { filter } => {
             if filter.principal.as_ref().is_some_and(|principal| {
@@ -568,19 +726,35 @@ fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serd
             }
             let mut page =
                 worker::wait(service.ledger.page(filter, read).map_err(err)?).map_err(err)?;
+            let capabilities: Vec<_> = page
+                .sessions
+                .iter()
+                .map(|row| controls(token, &s, row))
+                .collect();
             for row in &mut page.sessions {
                 let personal = allowed(token, &s, row, READ | PERSONAL);
                 let usage = allowed(token, &s, row, READ | USAGE);
                 redact(row, personal, usage);
             }
-            serde_json::to_value(page).map_err(err)?
+            let mut page = serde_json::to_value(page).map_err(err)?;
+            if let Some(rows) = page["sessions"].as_array_mut() {
+                for (row, capability) in rows.iter_mut().zip(capabilities) {
+                    row["controls"] = capability;
+                }
+            }
+            page
         }
         Request::Session { id } => {
             let mut r = row(&id, 0)?;
+            let capability = controls(token, &s, &r);
+            let issued = r.proof.as_ref().map(|p| p.issued.clone());
             let personal = allowed(token, &s, &r, READ | PERSONAL);
             let usage = allowed(token, &s, &r, READ | USAGE);
             redact(&mut r, personal, usage);
-            serde_json::to_value(r).map_err(err)?
+            let mut value = serde_json::to_value(r).map_err(err)?;
+            value["controls"] = capability;
+            value["issued"] = serde_json::to_value(issued).map_err(err)?;
+            value
         }
         Request::History { id, limit } => {
             let r = row(&id, PERSONAL | USAGE)?;
@@ -617,8 +791,8 @@ fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serd
             serde_json::to_value(balances).map_err(err)?
         }
         Request::Disconnect { id } => {
-            row(&id, DISCONNECT)?;
-            serde_json::to_value(
+            let session = row(&id, DISCONNECT)?;
+            command_view(
                 worker::wait(
                     service
                         .ledger
@@ -626,15 +800,143 @@ fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serd
                         .map_err(err)?,
                 )
                 .map_err(err)?,
+                allowed(token, &s, &session, READ | PERSONAL),
+            )?
+        }
+        Request::Commands { id } => {
+            row(&id, PERSONAL)?;
+            serde_json::Value::Array(
+                worker::wait(service.ledger.command_history(id).map_err(err)?)
+                    .map_err(err)?
+                    .into_iter()
+                    .map(|c| command_view(c, true))
+                    .collect::<io::Result<Vec<_>>>()?,
+            )
+        }
+        Request::Reconciliation { id } => {
+            row(&id, PERSONAL)?;
+            serde_json::to_value(
+                worker::wait(service.ledger.reconciliation(id).map_err(err)?).map_err(err)?,
             )
             .map_err(err)?
         }
-        Request::Commands { id } => {
-            row(&id, DISCONNECT)?;
-            serde_json::to_value(
-                worker::wait(service.ledger.command_history(id).map_err(err)?).map_err(err)?,
+        Request::Control {
+            id,
+            action,
+            request_id,
+        } => {
+            use crate::{dynamic::Evaluation, native::dynamic::fallback_after};
+            use radius_accounting::dynamic::{Action, Intent};
+            let session = row(&id, crate::dynamic::right(action))?;
+            if let Some(command) = worker::wait(
+                service
+                    .ledger
+                    .command_request(actor.clone(), request_id.clone())
+                    .map_err(err)?,
             )
             .map_err(err)?
+            {
+                if command.session != id || command.requested_action != action {
+                    return Err(control_failure(
+                        "request-conflict",
+                        "The request ID already names a different operation.",
+                    ));
+                }
+                return command_view(command, allowed(token, &s, &session, READ | PERSONAL));
+            }
+            radius_accounting::dynamic::Target::from_session(&session).map_err(|_| {
+                control_failure(
+                    "unmanageable",
+                    "Precise NAS and session selectors are required.",
+                )
+            })?;
+            let policy = session
+                .policy
+                .as_ref()
+                .and_then(|p| s.config.dynamic.policies.get(p))
+                .ok_or_else(|| {
+                    control_failure(
+                        "configuration-unavailable",
+                        "Session policy is unavailable.",
+                    )
+                })?;
+            let fallback = fallback_after(action, &policy.fallback);
+            for next in &fallback {
+                if !allowed(token, &s, &session, READ | crate::dynamic::right(*next)) {
+                    return Err(control_failure(
+                        "permission-denied",
+                        "Permission for a configured fallback action is required.",
+                    ));
+                }
+            }
+            let authority = service
+                .authority()
+                .filter(|a| a.revision == s.config.fingerprint)
+                .ok_or_else(|| {
+                    control_failure(
+                        "configuration-unavailable",
+                        "Active authentication configuration is unavailable.",
+                    )
+                })?;
+            let desired = match (authority.evaluate)(std::slice::from_ref(&session))
+                .into_iter()
+                .next()
+            {
+                Some(Evaluation::Granted { desired, .. }) => Some(desired),
+                Some(Evaluation::Denied | Evaluation::Disabled | Evaluation::Deleted)
+                    if action == Action::Disconnect =>
+                {
+                    None
+                }
+                Some(Evaluation::Unavailable(_)) if action == Action::Disconnect => None,
+                Some(Evaluation::Unavailable(_)) if action == Action::Reauthenticate => {
+                    Some(radius_accounting::dynamic::Authorization {
+                        vlan: None,
+                        timeout_seconds: 1,
+                    })
+                }
+                Some(Evaluation::Unavailable(_)) | None => {
+                    return Err(control_failure(
+                        "authority-unavailable",
+                        "Fresh identity evaluation is unavailable; no authorization update was issued.",
+                    ));
+                }
+                _ => {
+                    return Err(control_failure(
+                        "access-denied",
+                        "Current policy does not permit an authorization update.",
+                    ));
+                }
+            };
+            if service
+                .authority()
+                .is_none_or(|a| a.revision != authority.revision)
+            {
+                return Err(control_failure(
+                    "superseded",
+                    "Configuration changed; inspect the current state before retrying.",
+                ));
+            }
+            command_view(
+                worker::wait(
+                    service
+                        .ledger
+                        .dynamic(Intent {
+                            intent_key: String::new(),
+                            request_id: Some(request_id),
+                            session: id,
+                            actor,
+                            reason: "administrator".into(),
+                            action,
+                            configuration: authority.revision,
+                            desired,
+                            fallback,
+                        })
+                        .map_err(err)?,
+                )
+                .map_err(err)?,
+                allowed(token, &s, &session, READ | PERSONAL),
+            )?
         }
         Request::Annotate { id, note } => {
             row(&id, CORRECT)?;
@@ -746,7 +1048,13 @@ fn serve(service: Service) -> io::Result<()> {
             })();
             let envelope = match result {
                 Ok(value) => serde_json::json!({"ok":value}),
-                Err(_) => serde_json::json!({"error":"accounting request unavailable or denied"}),
+                Err(error) => match error
+                    .get_ref()
+                    .and_then(|e| e.downcast_ref::<ControlFailure>())
+                {
+                    Some(error) => serde_json::json!({"error":error.message,"code":error.code}),
+                    None => serde_json::json!({"error":"accounting request unavailable or denied"}),
+                },
             };
             if let Ok(bytes) = serde_json::to_vec(&envelope) {
                 let _ = send(&mut stream, &bytes, MAX_RESPONSE);
@@ -755,7 +1063,12 @@ fn serve(service: Service) -> io::Result<()> {
     });
     Ok(())
 }
-pub fn query(request: Request) -> io::Result<serde_json::Value> {
+pub fn query(mut request: Request) -> io::Result<serde_json::Value> {
+    if let Request::Control { request_id, .. } = &mut request {
+        if request_id.is_empty() {
+            *request_id = crate::model::new_id().map_err(err)?;
+        }
+    }
     let mut stream = UnixStream::connect(SOCKET)?;
     stream.set_read_timeout(Some(Duration::from_secs(6)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -770,8 +1083,11 @@ pub fn query(request: Request) -> io::Result<serde_json::Value> {
     )?;
     let reply: serde_json::Value =
         serde_json::from_slice(&receive(&mut stream, MAX_RESPONSE)?).map_err(err)?;
-    reply
-        .get("ok")
-        .cloned()
-        .ok_or_else(|| err("accounting request unavailable or denied"))
+    reply.get("ok").cloned().ok_or_else(|| {
+        err(reply
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(|s| s.chars().take(512).collect::<String>())
+            .unwrap_or_else(|| "accounting request unavailable or denied".into()))
+    })
 }

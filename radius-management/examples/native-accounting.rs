@@ -22,6 +22,7 @@ fn main() {
             store
                 .grant(
                     &radius_accounting::model::Grant {
+                        proof: None,
                         reference: b"accounting-native-grant".to_vec(),
                         client: "11111111-1111-4111-8111-111111111111".into(),
                         policy: "22222222-2222-4222-8222-222222222222".into(),

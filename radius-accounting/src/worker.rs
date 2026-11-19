@@ -1,17 +1,17 @@
 //! Bounded database owner. Packet loops only enqueue and poll completions.
 use crate::{
+    Error, Result,
     model::{Grant, Observation, Receipt, Session, Settings},
     quota::{Balance, Budget},
     store::{Annotation, Command, Correction, Filter, Health, Page, Store},
-    Error, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     path::PathBuf,
     sync::{
-        mpsc::{self, Receiver, SyncSender, TrySendError},
         Arc, Mutex,
+        mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -56,6 +56,7 @@ enum Work {
         SyncSender<Result<Receipt>>,
     ),
     Grant(Grant, SyncSender<Result<Vec<Balance>>>),
+    Bind(crate::dynamic::Proof, SyncSender<Result<()>>),
     Configure(Settings, Vec<Budget>, SyncSender<Result<()>>),
     Page(Filter, View, SyncSender<Result<Page>>),
     Session(String, View, SyncSender<Result<Option<Session>>>),
@@ -64,8 +65,16 @@ enum Work {
     Annotate(Annotation, SyncSender<Result<()>>),
     Correct(Correction, SyncSender<Result<()>>),
     Disconnect(String, String, String, SyncSender<Result<Command>>),
+    Dynamic(crate::dynamic::Intent, SyncSender<Result<Command>>),
+    Reconciliation(String, SyncSender<Result<crate::dynamic::Reconciliation>>),
+    Reconciled(
+        String,
+        crate::dynamic::Reconciliation,
+        SyncSender<Result<()>>,
+    ),
     Commands(SyncSender<Result<Vec<Command>>>),
     CommandHistory(String, SyncSender<Result<Vec<Command>>>),
+    CommandRequest(String, String, SyncSender<Result<Option<Command>>>),
     Dispatch(SyncSender<Result<Vec<(Command, Session)>>>),
     CommandResult(Command, SyncSender<Result<()>>),
     Rebuild(String, SyncSender<Result<()>>),
@@ -120,6 +129,9 @@ impl Handle {
     pub fn grant(&self, g: Grant) -> Result<Completion<Vec<Balance>>> {
         self.submit(|tx| Work::Grant(g, tx))
     }
+    pub fn bind_grant(&self, proof: crate::dynamic::Proof) -> Result<Completion<()>> {
+        self.submit(|tx| Work::Bind(proof, tx))
+    }
     pub fn configure(&self, s: Settings, b: Vec<Budget>) -> Result<Completion<()>> {
         s.validate()?;
         for budget in &b {
@@ -158,9 +170,23 @@ impl Handle {
     pub fn commands(&self) -> Result<Completion<Vec<Command>>> {
         self.submit(Work::Commands)
     }
+    pub fn dynamic(&self, intent: crate::dynamic::Intent) -> Result<Completion<Command>> {
+        self.submit(|tx| Work::Dynamic(intent, tx))
+    }
+    pub fn reconciliation(&self, id: String) -> Result<Completion<crate::dynamic::Reconciliation>> {
+        self.submit(|tx| Work::Reconciliation(id, tx))
+    }
+    pub fn reconciled(
+        &self,
+        id: String,
+        state: crate::dynamic::Reconciliation,
+    ) -> Result<Completion<()>> {
+        self.submit(|tx| Work::Reconciled(id, state, tx))
+    }
     pub fn command_history(&self, session: String) -> Result<Completion<Vec<Command>>> {
         self.submit(|tx| Work::CommandHistory(session, tx))
     }
+    pub fn command_request(&self, actor:String, request:String)->Result<Completion<Option<Command>>>{self.submit(|tx|Work::CommandRequest(actor,request,tx))}
     pub fn dispatch(&self) -> Result<Completion<Vec<(Command, Session)>>> {
         self.submit(Work::Dispatch)
     }
@@ -332,6 +358,9 @@ fn run(
                         }
                         let _ = tx.try_send(result);
                     }
+                    Work::Bind(proof, tx) => {
+                        let _ = tx.try_send(s.bind_grant(&proof));
+                    }
                     Work::Configure(config, b, tx) => {
                         let result = if config.queue_count != settings.queue_count {
                             Err(Error::Configuration(
@@ -376,12 +405,22 @@ fn run(
                     Work::Disconnect(id, actor, reason, tx) => {
                         let _ = tx.try_send(s.enqueue_disconnect(&id, &actor, now_ms(), &reason));
                     }
+                    Work::Dynamic(intent, tx) => {
+                        let _ = tx.try_send(s.enqueue_dynamic(intent, now_ms()));
+                    }
+                    Work::Reconciliation(id, tx) => {
+                        let _ = tx.try_send(s.reconciliation(&id));
+                    }
+                    Work::Reconciled(id, state, tx) => {
+                        let _ = tx.try_send(s.reconciled(&id, &state));
+                    }
                     Work::Commands(tx) => {
                         let _ = tx.try_send(s.commands());
                     }
                     Work::CommandHistory(id, tx) => {
                         let _ = tx.try_send(s.command_history(&id));
                     }
+                    Work::CommandRequest(actor,request,tx)=>{let _=tx.try_send(s.command_request(&actor,&request));}
                     Work::Dispatch(tx) => {
                         let result = s
                             .commands()
@@ -418,12 +457,17 @@ fn run(
                     Work::Session(_, _, tx) => unavailable(tx),
                     Work::History(_, _, _, tx) => unavailable(tx),
                     Work::Annotate(_, tx)
+                    | Work::Bind(_, tx)
+                    | Work::Reconciled(_, _, tx)
                     | Work::CommandResult(_, tx)
                     | Work::Rebuild(_, tx)
                     | Work::Correct(_, tx) => unavailable(tx),
                     Work::Disconnect(_, _, _, tx) => unavailable(tx),
+                    Work::Dynamic(_, tx) => unavailable(tx),
+                    Work::Reconciliation(_, tx) => unavailable(tx),
                     Work::Commands(tx) => unavailable(tx),
                     Work::CommandHistory(_, tx) => unavailable(tx),
+                    Work::CommandRequest(_,_,tx)=>unavailable(tx),
                     Work::Dispatch(tx) => unavailable(tx),
                     Work::Record(..) | Work::Stop(..) => unreachable!(),
                 }

@@ -8,6 +8,339 @@ const SECRET: &[u8] = b"accounting-test-only-secret";
 const USER: &str = "S-1-5-21-1-2-3-1001";
 const GROUP: &str = "S-1-5-21-1-2-3-2001";
 
+fn proof(g: &Grant, vlan: Option<u16>, revision: u8) -> radius_accounting::dynamic::Proof {
+    use radius_accounting::dynamic::*;
+    Proof {
+        sequence: 0,
+        grant: g.reference.clone(),
+        authenticated_ms: g.issued_ms,
+        configuration: "a".repeat(64),
+        issued: Authorization {
+            vlan,
+            timeout_seconds: 3600,
+        },
+        configured_timeout_seconds: 3600,
+        credentials: vec![CredentialBinding {
+            reference: [3; 16],
+            revision: [revision; 16],
+        }],
+    }
+}
+#[test]
+fn fresh_proof_order_survives_equal_clocks_delayed_class_and_rebuild() {
+    let mut store = Store::memory(Settings::default()).unwrap();
+    let first = grant(91);
+    store.grant(&first, 0).unwrap();
+    store.bind_grant(&proof(&first, Some(10), 1)).unwrap();
+    let receipt = store
+        .record(&[with_identity(observation(1, b"proved", 100), &first)])
+        .unwrap()
+        .remove(0);
+    let id = receipt.session.unwrap();
+    let original = store.session(&id).unwrap().unwrap().proof.unwrap();
+    let second = grant(92); // Same wall-clock millisecond, distinct committed proof.
+    store.grant(&second, 0).unwrap();
+    store.bind_grant(&proof(&second, Some(20), 2)).unwrap();
+    store
+        .record(&[with_identity(observation(3, b"proved", 110), &second)])
+        .unwrap();
+    let current = store.session(&id).unwrap().unwrap().proof.unwrap();
+    assert!(current.sequence > original.sequence);
+    assert_eq!(current.credentials[0].revision, [2; 16]);
+    store
+        .record(&[with_identity(observation(3, b"proved", 120), &first)])
+        .unwrap();
+    assert_eq!(
+        store.session(&id).unwrap().unwrap().proof.as_ref(),
+        Some(&current)
+    );
+    let state = radius_accounting::dynamic::Reconciliation {
+        unavailable_since_ms: Some(115000),
+        status: "pending".into(),
+        proof: current.grant.clone(),
+        ..Default::default()
+    };
+    store.reconciled(&id, &state).unwrap();
+    store.rebuild().unwrap();
+    assert_eq!(
+        store.session(&id).unwrap().unwrap().proof.as_ref(),
+        Some(&current)
+    );
+    assert_eq!(store.reconciliation(&id).unwrap(), state);
+}
+
+#[test]
+fn schema_one_upgrade_preserves_unknown_baseline_accounting_and_pending_disconnect() {
+    let directory = std::env::temp_dir().join(format!(
+        "radius-upgrade-{}",
+        radius_accounting::id().unwrap()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("ledger.db");
+    let mut store = Store::open(&path, Settings::default()).unwrap();
+    let g = grant(88);
+    store.grant(&g, 0).unwrap();
+    let id = store
+        .record(&[with_identity(observation(1, b"legacy", 100), &g)])
+        .unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    let command = store
+        .enqueue_disconnect(&id, USER, 101000, "administrator")
+        .unwrap();
+    let health = store.health().unwrap();
+    drop(store);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    let data = serde_json::json!({"id":command.id,"session":id,"actor":USER,"created_ms":101000,"state":"pending","attempts":0,"reason":"administrator","error_cause":null});
+    db.execute(
+        "UPDATE commands SET data=?",
+        [serde_json::to_vec(&data).unwrap()],
+    )
+    .unwrap();
+    db.execute_batch("DROP TABLE reconciliations; DROP INDEX one_pending_control; CREATE UNIQUE INDEX one_pending_disconnect ON commands(session) WHERE state IN ('pending','sent','uncertain'); PRAGMA user_version=1;").unwrap();
+    drop(db);
+    let store = Store::open(&path, Settings::default()).unwrap();
+    assert!(store.session(&id).unwrap().unwrap().proof.is_none());
+    assert_eq!(store.health().unwrap().sessions, health.sessions);
+    assert_eq!(store.health().unwrap().observations, health.observations);
+    let commands = store.commands().unwrap();
+    assert_eq!(commands[0].id, command.id);
+    assert_eq!(
+        commands[0].action,
+        radius_accounting::dynamic::Action::Disconnect
+    );
+    assert!(commands[0].target.is_none());
+    drop(store);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn unsent_supersession_is_durable_and_cannot_be_overwritten_by_stale_dispatch() {
+    use radius_accounting::dynamic::*;
+    let mut store = Store::memory(Settings::default()).unwrap();
+    let g = grant(87);
+    store.grant(&g, 0).unwrap();
+    store.bind_grant(&proof(&g, Some(10), 1)).unwrap();
+    let id = store
+        .record(&[with_identity(observation(1, b"supersede", 100), &g)])
+        .unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    let intent = Intent {
+        intent_key: String::new(),
+        request_id: None,
+        session: id.clone(),
+        actor: "radiusd".into(),
+        reason: "vlan-changed".into(),
+        action: Action::Disconnect,
+        configuration: "a".repeat(64),
+        desired: None,
+        fallback: vec![],
+    };
+    let mut old = store.enqueue_dynamic(intent.clone(), 101000).unwrap();
+    let new = store
+        .enqueue_dynamic(
+            Intent {
+                configuration: "b".repeat(64),
+                ..intent
+            },
+            102000,
+        )
+        .unwrap();
+    assert_ne!(old.id, new.id);
+    old.state = "sent".into();
+    old.attempts = 1;
+    assert!(store.command_result(&old).is_err());
+    assert_eq!(store.commands().unwrap().len(), 1);
+    assert_eq!(store.commands().unwrap()[0].id, new.id);
+    assert!(
+        store
+            .command_history(&id)
+            .unwrap()
+            .iter()
+            .any(|c| c.id == old.id && c.state == "superseded")
+    );
+}
+
+#[test]
+fn manual_request_ids_retain_terminal_results_and_cannot_retarget() {
+    use radius_accounting::dynamic::*;
+    let mut store = Store::memory(Settings::default()).unwrap();
+    let id = store.record(&[observation(1, b"manual-id", 100)]).unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    let intent = Intent {
+        intent_key: String::new(),
+        request_id: Some("stable-manual-request".into()),
+        session: id.clone(),
+        actor: USER.into(),
+        reason: "administrator".into(),
+        action: Action::Disconnect,
+        configuration: "a".repeat(64),
+        desired: None,
+        fallback: vec![],
+    };
+    let mut original = store.enqueue_dynamic(intent.clone(), 101000).unwrap();
+    original.state = "acknowledged".into();
+    store.command_result(&original).unwrap();
+    let repeated = store.enqueue_dynamic(intent.clone(), 102000).unwrap();
+    assert_eq!(repeated.id, original.id);
+    assert_eq!(repeated.state, "acknowledged");
+    assert_eq!(store.command_history(&id).unwrap().len(), 1);
+    assert!(
+        store
+            .enqueue_dynamic(
+                Intent {
+                    session: "another".into(),
+                    ..intent.clone()
+                },
+                103000
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .enqueue_dynamic(
+                Intent {
+                    action: Action::Reauthenticate,
+                    ..intent
+                },
+                103000
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .command_request(USER, "stable-manual-request")
+            .unwrap()
+            .unwrap()
+            .id,
+        original.id
+    );
+}
+
+#[test]
+fn observed_assignment_is_optional_and_never_inferred_from_issued_policy() {
+    let mut store = Store::memory(Settings::default()).unwrap();
+    let g = grant(86);
+    store.grant(&g, 0).unwrap();
+    store.bind_grant(&proof(&g, Some(10), 1)).unwrap();
+    let id = store
+        .record(&[with_identity(observation(1, b"observed", 100), &g)])
+        .unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    assert!(store.session(&id).unwrap().unwrap().observed.is_none());
+    let mut report = with_identity(observation(3, b"observed", 110), &g);
+    report.attributes.push(Attribute {
+        kind: 81,
+        value: b"\x00120".to_vec(),
+    });
+    store.record(&[report]).unwrap();
+    let session = store.session(&id).unwrap().unwrap();
+    assert_eq!(session.observed.unwrap().vlan, Some(120));
+    assert_eq!(session.proof.unwrap().issued.vlan, Some(10));
+}
+#[test]
+fn a_new_explicit_request_can_retry_an_uncertain_occurrence() {
+    use radius_accounting::dynamic::*;
+    let mut store = Store::memory(Settings::default()).unwrap();
+    let id = store
+        .record(&[observation(1, b"manual-uncertain", 100)])
+        .unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    let intent = Intent {
+        intent_key: String::new(),
+        request_id: Some("first".into()),
+        session: id.clone(),
+        actor: USER.into(),
+        reason: "administrator".into(),
+        action: Action::Disconnect,
+        configuration: "a".repeat(64),
+        desired: None,
+        fallback: vec![],
+    };
+    let mut original = store.enqueue_dynamic(intent.clone(), 101000).unwrap();
+    original.state = "uncertain".into();
+    store.command_result(&original).unwrap();
+    assert_eq!(
+        store.enqueue_dynamic(intent.clone(), 102000).unwrap().id,
+        original.id
+    );
+    let second = store
+        .enqueue_dynamic(
+            Intent {
+                request_id: Some("second".into()),
+                ..intent
+            },
+            103000,
+        )
+        .unwrap();
+    assert_ne!(second.id, original.id);
+    assert_eq!(store.command_history(&id).unwrap().len(), 2);
+}
+#[test]
+fn automatic_intent_deduplication_outlives_the_history_page() {
+    use radius_accounting::dynamic::*;
+    let mut store = Store::memory(Settings::default()).unwrap();
+    let id = store
+        .record(&[observation(1, b"long-control-history", 100)])
+        .unwrap()[0]
+        .session
+        .clone()
+        .unwrap();
+    let intent = Intent {
+        intent_key: "1:effective-revocation".into(),
+        request_id: None,
+        session: id.clone(),
+        actor: "radiusd".into(),
+        reason: "access-revoked".into(),
+        action: Action::Disconnect,
+        configuration: "a".repeat(64),
+        desired: None,
+        fallback: vec![],
+    };
+    let mut original = store.enqueue_dynamic(intent.clone(), 101000).unwrap();
+    original.state = "acknowledged".into();
+    store.command_result(&original).unwrap();
+    for i in 0..201 {
+        let mut c = store
+            .enqueue_dynamic(
+                Intent {
+                    intent_key: String::new(),
+                    actor: USER.into(),
+                    request_id: Some(format!("manual-{i}")),
+                    reason: "administrator".into(),
+                    ..intent.clone()
+                },
+                102000 + i,
+            )
+            .unwrap();
+        c.state = "acknowledged".into();
+        store.command_result(&c).unwrap();
+    }
+    assert_eq!(store.command_history(&id).unwrap().len(), 200);
+    assert_eq!(
+        store
+            .enqueue_dynamic(
+                Intent {
+                    configuration: "b".repeat(64),
+                    ..intent
+                },
+                103000
+            )
+            .unwrap()
+            .id,
+        original.id
+    );
+}
+
 #[test]
 fn committed_but_unacknowledged_process_exit_recovers_as_a_retry() {
     const CHILD: &str = "RADIUS_ACCOUNTING_CRASH_PATH";
@@ -73,8 +406,8 @@ fn batch_failure_has_no_partial_receipts_or_interpretation() {
 fn owner_recovers_without_losing_configured_limits() {
     use radius_accounting::worker::{self, Handle};
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
     let directory = std::env::temp_dir().join(format!(
         "radius-worker-{}",
@@ -99,15 +432,17 @@ fn owner_recovers_without_losing_configured_limits() {
         }),
     )
     .unwrap();
-    assert!(worker::wait(
-        handle
-            .configure(
-                settings,
-                vec![budget("closed", USER, Dimension::Concurrent, 0)]
-            )
-            .unwrap()
-    )
-    .is_err());
+    assert!(
+        worker::wait(
+            handle
+                .configure(
+                    settings,
+                    vec![budget("closed", USER, Dimension::Concurrent, 0)]
+                )
+                .unwrap()
+        )
+        .is_err()
+    );
     available.store(true, Ordering::SeqCst);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !handle.snapshot().available && std::time::Instant::now() < deadline {
@@ -179,6 +514,7 @@ fn observation(status: u32, session: &[u8], time: u32) -> Observation {
 }
 fn grant(reference: u8) -> Grant {
     Grant {
+        proof: None,
         reference: vec![reference; 16],
         client: "client".into(),
         policy: "policy".into(),
@@ -392,10 +728,12 @@ fn rebuilding_retained_evidence_preserves_ids_usage_and_commands() {
     store.rebuild().unwrap();
     store.rebuild().unwrap();
     assert_eq!(before, store.balances(&g, 120000).unwrap());
-    assert!(store
-        .session(start.session.as_ref().unwrap())
-        .unwrap()
-        .is_some());
+    assert!(
+        store
+            .session(start.session.as_ref().unwrap())
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(commands[0].id, store.commands().unwrap()[0].id);
 }
 #[test]
@@ -426,10 +764,12 @@ fn retention_keeps_lifetime_allowances_after_personal_history_expires() {
     let before = store.balances(&g, 120000).unwrap();
     store.maintain(120000).unwrap();
     store.rebuild().unwrap();
-    assert!(store
-        .session(start.session.as_ref().unwrap())
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .session(start.session.as_ref().unwrap())
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(before, store.balances(&g, 120000).unwrap());
 }
 #[test]
@@ -574,12 +914,14 @@ fn quota_disconnect_does_not_fake_a_stop_or_repeat_terminal_commands() {
     store.command_result(&commands[0]).unwrap();
     store.enforce(120000).unwrap();
     assert!(store.commands().unwrap().is_empty());
-    assert!(store
-        .session(r.session.as_ref().unwrap())
-        .unwrap()
-        .unwrap()
-        .end_ms
-        .is_none());
+    assert!(
+        store
+            .session(r.session.as_ref().unwrap())
+            .unwrap()
+            .unwrap()
+            .end_ms
+            .is_none()
+    );
     assert_eq!(
         store
             .enqueue_disconnect(
@@ -741,11 +1083,13 @@ fn concurrent_limit_allows_reauthentication_without_reserving_another_slot() {
     renewed.issued_ms = 110000;
     assert!(store.grant(&renewed, 110000).is_ok());
     assert!(store.grant(&renewed, 110001).is_ok());
-    assert!(store
-        .balances(&first, 110001)
-        .unwrap()
-        .iter()
-        .all(|b| b.used == 1));
+    assert!(
+        store
+            .balances(&first, 110001)
+            .unwrap()
+            .iter()
+            .all(|b| b.used == 1)
+    );
     assert_eq!(store.enforce(110001).unwrap(), 0);
 
     for (n, change) in ["station", "client", "policy", "sid", "missing", "empty"]
@@ -772,11 +1116,13 @@ fn concurrent_limit_allows_reauthentication_without_reserving_another_slot() {
     let mut stop = with_identity(observation(2, b"reauth", 112), &renewed);
     stop.station = first.station.clone();
     store.record(&[stop]).unwrap();
-    assert!(store
-        .balances(&first, 112001)
-        .unwrap()
-        .iter()
-        .all(|b| b.used == 0));
+    assert!(
+        store
+            .balances(&first, 112001)
+            .unwrap()
+            .iter()
+            .all(|b| b.used == 0)
+    );
 }
 
 #[test]
@@ -885,15 +1231,17 @@ fn row_authorization_precedes_pagination_and_revision_is_checked() {
     assert_eq!(page.sessions.len(), 2);
     assert!(page.next.is_some());
     store.record(&[observation(1, b"new", 100)]).unwrap();
-    assert!(store
-        .page(
-            &Filter {
-                revision: Some(page.revision),
-                ..filter
-            },
-            |_| true
-        )
-        .is_err());
+    assert!(
+        store
+            .page(
+                &Filter {
+                    revision: Some(page.revision),
+                    ..filter
+                },
+                |_| true
+            )
+            .is_err()
+    );
 }
 #[test]
 fn durable_reopen_and_single_owner() {
@@ -911,10 +1259,12 @@ fn durable_reopen_and_single_owner() {
         .remove(0);
     drop(store);
     let mut store = Store::open(&path, Settings::default()).unwrap();
-    assert!(store
-        .session(r.session.as_ref().unwrap())
-        .unwrap()
-        .is_some());
+    assert!(
+        store
+            .session(r.session.as_ref().unwrap())
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         store.record(&[observation(1, b"x", 100)]).unwrap()[0].id,
         r.id

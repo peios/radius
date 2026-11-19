@@ -5,11 +5,11 @@ use crate::{
     driver::{AdmissionContext, AdmissionExtras, Backend, Progress, Reason},
 };
 use peios::security::SidRef;
-use peios_auth::{fields, Authenticated, Field};
+use peios_auth::{Authenticated, Field, fields};
 use radius_accounting::{
     model::Grant,
     quota::{Balance, Dimension},
-    worker::{now_ms, Completion},
+    worker::{Completion, now_ms},
 };
 use radius_core::Verification;
 use radius_management::native::accounting::Service;
@@ -18,7 +18,10 @@ use std::{collections::HashMap, sync::mpsc::TryRecvError};
 struct Pending {
     fingerprint: String,
     class: Vec<u8>,
-    result: Completion<Vec<Balance>>,
+    result: Option<Completion<Vec<Balance>>>,
+    bound: Option<Completion<()>>,
+    proof: radius_accounting::dynamic::Proof,
+    timeout: Option<u32>,
 }
 pub struct AccountingAuth {
     auth: Auth,
@@ -127,6 +130,7 @@ impl Backend for AccountingAuth {
             )
             .into_bytes();
             let grant = Grant {
+                proof: None,
                 reference: class.clone(),
                 client: c.client_id.into(),
                 policy: c.network_id.into(),
@@ -145,8 +149,35 @@ impl Backend for AccountingAuth {
                         c.id,
                         Pending {
                             fingerprint: snapshot.config.fingerprint.clone(),
-                            class,
-                            result,
+                            class: class.clone(),
+                            result: Some(result),
+                            bound: None,
+                            proof: radius_accounting::dynamic::Proof {
+                                sequence: 0,
+                                grant: class.clone(),
+                                authenticated_ms: now,
+                                configuration: c.saved_fingerprint.into(),
+                                configured_timeout_seconds: c.network.reauthenticate_seconds,
+                                issued: radius_accounting::dynamic::Authorization {
+                                    vlan: c.vlan,
+                                    timeout_seconds: c.network.reauthenticate_seconds,
+                                },
+                                credentials: match s
+                                    .identity
+                                    .fields
+                                    .get(&fields::CREDENTIAL_BINDINGS)
+                                {
+                                    Some(Field::CredentialBindings(bindings)) => bindings
+                                        .iter()
+                                        .map(|b| radius_accounting::dynamic::CredentialBinding {
+                                            reference: b.reference,
+                                            revision: b.revision,
+                                        })
+                                        .collect(),
+                                    _ => Vec::new(),
+                                },
+                            },
+                            timeout: None,
                         },
                     );
                 }
@@ -156,12 +187,27 @@ impl Backend for AccountingAuth {
                         Ok(Some(AdmissionExtras::default()))
                     } else {
                         Err(Reason::Accounting)
-                    }
+                    };
                 }
             }
         }
-        let pending = self.pending.get(&c.id).unwrap();
-        match pending.result.try_recv() {
+        let pending = self.pending.get_mut(&c.id).unwrap();
+        if let Some(bound) = &pending.bound {
+            return match bound.try_recv() {
+                Err(TryRecvError::Empty) => Ok(None),
+                Ok(Ok(())) => Ok(Some(AdmissionExtras {
+                    class: Some(pending.class.clone()),
+                    timeout_seconds: pending.timeout,
+                })),
+                _ => Err(Reason::Accounting),
+            };
+        }
+        match pending
+            .result
+            .as_ref()
+            .ok_or(Reason::Accounting)?
+            .try_recv()
+        {
             Err(TryRecvError::Empty) => Ok(None),
             Ok(Ok(balances)) => {
                 let timeout = balances
@@ -174,10 +220,19 @@ impl Backend for AccountingAuth {
                     })
                     .map(|b| (b.remaining / 1000).max(1).min(u32::MAX as u64) as u32)
                     .min();
-                Ok(Some(AdmissionExtras {
-                    class: Some(pending.class.clone()),
-                    timeout_seconds: timeout,
-                }))
+                pending.proof.issued.timeout_seconds = timeout
+                    .map_or(c.network.reauthenticate_seconds, |t| {
+                        t.min(c.network.reauthenticate_seconds)
+                    });
+                pending.timeout = timeout;
+                pending.bound = Some(
+                    self.service
+                        .ledger
+                        .bind_grant(pending.proof.clone())
+                        .map_err(|_| Reason::Accounting)?,
+                );
+                pending.result = None;
+                Ok(None)
             }
             Ok(Err(radius_accounting::Error::Configuration(message)))
                 if message == "principal allowance exhausted" =>

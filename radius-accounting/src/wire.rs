@@ -11,6 +11,9 @@ pub const ACCOUNTING_RESPONSE: u8 = 5;
 pub const DISCONNECT_REQUEST: u8 = 40;
 pub const DISCONNECT_ACK: u8 = 41;
 pub const DISCONNECT_NAK: u8 = 42;
+pub const COA_REQUEST: u8 = 43;
+pub const COA_ACK: u8 = 44;
+pub const COA_NAK: u8 = 45;
 type HmacMd5 = Hmac<Md5>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,7 +243,16 @@ fn response(
 /// RFC 5176 Disconnect: NAS-address/session selectors are adapter-validated.
 /// No username-only or wildcard targeting is allowed by this encoder.
 pub fn disconnect(identifier: u8, attrs: &[Attribute], secret: &[u8]) -> Result<Vec<u8>> {
-    if !attrs.iter().any(|a| a.kind == 44 && !a.value.is_empty())
+    dynamic_request(DISCONNECT_REQUEST, identifier, attrs, secret)
+}
+pub fn dynamic_request(
+    code: u8,
+    identifier: u8,
+    attrs: &[Attribute],
+    secret: &[u8],
+) -> Result<Vec<u8>> {
+    if !matches!(code, DISCONNECT_REQUEST | COA_REQUEST)
+        || !attrs.iter().any(|a| a.kind == 44 && !a.value.is_empty())
         || !attrs.iter().any(|a| matches!(a.kind, 4 | 32 | 95))
         || attrs
             .iter()
@@ -250,16 +262,35 @@ pub fn disconnect(identifier: u8, attrs: &[Attribute], secret: &[u8]) -> Result<
             "Disconnect requires NAS and session selectors".into(),
         ));
     }
-    let (mut bytes, _) = encode(DISCONNECT_REQUEST, identifier, &[0; 16], attrs, false)?;
+    let (mut bytes, offset) = encode(code, identifier, &[0; 16], attrs, true)?;
+    put_mac(&mut bytes, offset.ok_or(Error::Integrity)?, secret)?;
     let hash = request_hash(&bytes, secret);
     bytes[4..20].copy_from_slice(&hash);
     Ok(bytes)
 }
 pub fn disconnect_result(bytes: &[u8], sent: &[u8], secret: &[u8]) -> Result<(bool, Option<u32>)> {
-    if sent.len() < 20 || !matches!(bytes.first(), Some(&DISCONNECT_ACK) | Some(&DISCONNECT_NAK)) {
+    dynamic_result(bytes, sent, secret, false)
+}
+pub fn dynamic_result(
+    bytes: &[u8],
+    sent: &[u8],
+    secret: &[u8],
+    require_ma: bool,
+) -> Result<(bool, Option<u32>)> {
+    if sent.len() < 20
+        || bytes.len() < 20
+        || !matches!(
+            (sent[0], bytes[0]),
+            (DISCONNECT_REQUEST, DISCONNECT_ACK | DISCONNECT_NAK)
+                | (COA_REQUEST, COA_ACK | COA_NAK)
+        )
+    {
         return Err(Error::Malformed);
     }
     let (bytes, attrs, ma) = frame(bytes, bytes[0])?;
+    if require_ma && ma.is_none() {
+        return Err(Error::Integrity);
+    }
     if bytes[1] != sent[1] {
         return Err(Error::Integrity);
     }
@@ -281,5 +312,131 @@ pub fn disconnect_result(bytes: &[u8], sent: &[u8], secret: &[u8]) -> Result<(bo
         [a] if a.value.len() == 4 => Some(u32::from_be_bytes(a.value[..].try_into().unwrap())),
         _ => return Err(Error::Malformed),
     };
-    Ok((bytes[0] == DISCONNECT_ACK, cause))
+    let accepted = matches!(bytes[0], DISCONNECT_ACK | COA_ACK);
+    if cause.is_some_and(|c| {
+        !(if accepted { 200..=299 } else { 400..=599 }).contains(&c)
+            || (c == 201 && bytes[0] != DISCONNECT_ACK)
+            || c == 202
+            || (c == 405 && sent[0] == DISCONNECT_REQUEST)
+            || (c == 504 && bytes[0] != DISCONNECT_NAK)
+    }) {
+        return Err(Error::Malformed);
+    }
+    Ok((accepted, cause))
+}
+
+#[cfg(test)]
+mod dynamic_tests {
+    use super::*;
+    #[test]
+    fn error_causes_must_match_the_response_semantics() {
+        let secret = b"error-cause-fixture";
+        let attrs = vec![
+            Attribute {
+                kind: 32,
+                value: b"nas".to_vec(),
+            },
+            Attribute {
+                kind: 44,
+                value: b"session".to_vec(),
+            },
+        ];
+        for (request_code, response_code, cause, valid) in [
+            (DISCONNECT_REQUEST, DISCONNECT_ACK, 201, true),
+            (COA_REQUEST, COA_ACK, 201, false),
+            (COA_REQUEST, COA_ACK, 202, false),
+            (COA_REQUEST, COA_ACK, 401, false),
+            (COA_REQUEST, COA_NAK, 201, false),
+            (COA_REQUEST, COA_NAK, 405, true),
+            (DISCONNECT_REQUEST, DISCONNECT_NAK, 405, false),
+            (DISCONNECT_REQUEST, DISCONNECT_NAK, 504, true),
+            (COA_REQUEST, COA_NAK, 504, false),
+            (COA_REQUEST, COA_NAK, 600, false),
+        ] {
+            let sent = dynamic_request(request_code, 1, &attrs, secret).unwrap();
+            let auth = sent[4..20].try_into().unwrap();
+            let reply = response(
+                response_code,
+                1,
+                &auth,
+                &[Attribute::integer(101, cause)],
+                secret,
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                dynamic_result(&reply, &sent, secret, true).is_ok(),
+                valid,
+                "code {response_code}, cause {cause}"
+            );
+        }
+    }
+    #[test]
+    fn replies_bind_packet_family_identifier_secret_and_unique_request() {
+        let secret = b"dynamic-test-only-secret";
+        let mut attrs = vec![
+            Attribute {
+                kind: 32,
+                value: b"nas".to_vec(),
+            },
+            Attribute {
+                kind: 44,
+                value: b"session".to_vec(),
+            },
+            Attribute {
+                kind: 33,
+                value: b"nonce-a".to_vec(),
+            },
+        ];
+        for (request_code, ack) in [(COA_REQUEST, COA_ACK), (DISCONNECT_REQUEST, DISCONNECT_ACK)] {
+            let sent = dynamic_request(request_code, 7, &attrs, secret).unwrap();
+            let auth = sent[4..20].try_into().unwrap();
+            let reply = response(ack, 7, &auth, &[], secret, true).unwrap();
+            assert_eq!(
+                dynamic_result(&reply, &sent, secret, true).unwrap(),
+                (true, None)
+            );
+            assert!(dynamic_result(&reply, &sent, b"wrong", true).is_err());
+            attrs.last_mut().unwrap().value = b"nonce-b".to_vec();
+            let another = dynamic_request(request_code, 7, &attrs, secret).unwrap();
+            assert!(dynamic_result(&reply, &another, secret, true).is_err());
+            let wrong_family = response(
+                if ack == COA_ACK {
+                    DISCONNECT_ACK
+                } else {
+                    COA_ACK
+                },
+                7,
+                &auth,
+                &[],
+                secret,
+                true,
+            )
+            .unwrap();
+            assert!(dynamic_result(&wrong_family, &sent, secret, true).is_err());
+            let no_ma = response(ack, 7, &auth, &[], secret, false).unwrap();
+            assert!(dynamic_result(&no_ma, &sent, secret, true).is_err());
+            assert!(dynamic_result(&no_ma, &sent, secret, false).is_ok());
+            attrs.last_mut().unwrap().value = b"nonce-a".to_vec();
+        }
+    }
+    #[test]
+    fn timeouts_and_refusals_are_not_unsupported_capabilities() {
+        for code in [
+            None,
+            Some(402),
+            Some(403),
+            Some(404),
+            Some(407),
+            Some(501),
+            Some(503),
+            Some(506),
+            Some(507),
+        ] {
+            assert!(!crate::dynamic::explicitly_unsupported(code));
+        }
+        for code in [401, 405, 406] {
+            assert!(crate::dynamic::explicitly_unsupported(Some(code)));
+        }
+    }
 }

@@ -1,11 +1,10 @@
 //! Read eventd as the real caller; never proxy a privileged RADIUS snapshot.
 use crate::diagnostics::{
-    self as model, Filter, Projection, Record, Settings, View, ATTEMPT, OPERATION,
+    self as model, ATTEMPT, Filter, OPERATION, Projection, Record, Settings, View,
 };
 use eventd_client::{
-    text,
+    Value, text,
     wire::{Connection, Response},
-    Value,
 };
 use peios::registry::{Data, Key, KeyAccess, OpenFlags};
 use std::{
@@ -14,8 +13,8 @@ use std::{
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -233,6 +232,55 @@ fn connect(settings: &Settings, seconds: u32) -> io::Result<Connection<DeadlineS
         settings.get("MaxViewBytes") as usize,
     ))
 }
+/// Hint only: every actual control decision uses a fresh authoritative read.
+/// Query complete results under radiusd's ordinary event permissions.
+pub(super) fn identity_change_hint() -> io::Result<Option<[u8; 32]>> {
+    let stored = crate::model::Stored {
+        settings: [(
+            "DiagnosticsMaxViewBytes".into(),
+            crate::model::Value::Number(65536),
+        )]
+        .into(),
+        ..Default::default()
+    };
+    let settings = Settings::read(&stored).map_err(bad)?;
+    let mut connection = connect(&settings, 1)?;
+    let types = [
+        "lpsd.credential.changed",
+        "lpsd.account.created",
+        "lpsd.account.deleted",
+        "lpsd.account.modified",
+        "lpsd.group.deleted",
+        "lpsd.group.member.added",
+        "lpsd.group.member.removed",
+    ];
+    let filter = types
+        .iter()
+        .map(|name| format!("event.type == {}", text::string(name)))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    connection.send_query(&format!("EVENTS lpsd.* SINCE 2s ago TAKE 1 WHERE {filter} SELECT event.time, event.boot.guid, event.cpu, event.sequence, event.type")).map_err(query_error)?;
+    let mut fingerprint = None;
+    loop {
+        match connection.next_response().map_err(query_error)? {
+            Response::Records(records) if records.len() <= 1 && fingerprint.is_none() => {
+                if !records.is_empty() {
+                    fingerprint = Some(
+                        ring::digest::digest(
+                            &ring::digest::SHA256,
+                            format!("{records:?}").as_bytes(),
+                        )
+                        .as_ref()
+                        .try_into()
+                        .map_err(query_error)?,
+                    );
+                }
+            }
+            Response::End => return Ok(fingerprint),
+            _ => return Err(query_error("identity hint unavailable")),
+        }
+    }
+}
 fn convert(record: eventd_client::Record) -> Record {
     record
         .into_iter()
@@ -299,8 +347,13 @@ pub fn authority(operation: &str) -> io::Result<Vec<Record>> {
     let sid = crate::runtime::SERVICE_SID
         .parse::<peios::security::Sid>()
         .map_err(query_error)?;
-    let q=format!("EVENTS authd.authentication.attempted SINCE {}s ago TAKE 32 WHERE {OPERATION} == {} AND source.token.sid == {} SELECT {}",
-        settings.get("MaxLookbackSeconds"),text::binary(&id),text::binary(sid.as_bytes()),FIELDS.join(", "));
+    let q = format!(
+        "EVENTS authd.authentication.attempted SINCE {}s ago TAKE 32 WHERE {OPERATION} == {} AND source.token.sid == {} SELECT {}",
+        settings.get("MaxLookbackSeconds"),
+        text::binary(&id),
+        text::binary(sid.as_bytes()),
+        FIELDS.join(", ")
+    );
     connection.send_query(&q).map_err(query_error)?;
     let mut result = Vec::new();
     loop {
@@ -401,8 +454,10 @@ impl Monitor {
         let caller = Token::open_self(false, TokenAccess::QUERY)?.guid()?;
         let primary = Token::open_self(true, TokenAccess::QUERY)?.guid()?;
         if caller != primary {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                "Live diagnostics require the caller's own process; use a finite history query while impersonating"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Live diagnostics require the caller's own process; use a finite history query while impersonating",
+            ));
         }
         let settings = settings();
         filter.validate(&settings).map_err(bad)?;
@@ -572,13 +627,15 @@ mod tests {
         stream
             .consume(Response::Records(vec![evidence(1, Some("jack"))]), &state)
             .unwrap();
-        assert!(state
-            .lock()
-            .unwrap()
-            .projection
-            .view(false, "")
-            .attempts
-            .is_empty());
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .projection
+                .view(false, "")
+                .attempts
+                .is_empty()
+        );
         stream.consume(Response::Watch, &state).unwrap();
         stream
             .consume(Response::Records(vec![evidence(1, Some("jack"))]), &state)
@@ -598,12 +655,13 @@ mod tests {
                 &state,
             )
             .unwrap();
-        assert!(failed
-            .consume(Response::Error("not authorized".into()), &state)
-            .is_err());
+        assert!(
+            failed
+                .consume(Response::Error("not authorized".into()), &state)
+                .is_err()
+        );
         assert_eq!(
-            state.lock().unwrap().projection.view(false, "").attempts[0].summary
-                ["source.radiusd.username"],
+            state.lock().unwrap().projection.view(false, "").attempts[0].summary["source.radiusd.username"],
             "jack"
         );
 
@@ -613,9 +671,11 @@ mod tests {
             .unwrap();
         reconnect.consume(Response::Watch, &state).unwrap();
         let view = state.lock().unwrap().projection.view(true, "");
-        assert!(!view.attempts[0]
-            .summary
-            .contains_key("source.radiusd.username"));
+        assert!(
+            !view.attempts[0]
+                .summary
+                .contains_key("source.radiusd.username")
+        );
         assert!(view.possible_gap);
         assert!(!view.attempts[0].outcome_available);
         assert!(reconnect.consume(Response::Watch, &state).is_err());

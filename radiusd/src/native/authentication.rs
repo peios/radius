@@ -1,5 +1,5 @@
 use crate::{
-    config::{Network, CONNECT},
+    config::{CONNECT, Network},
     driver::{Backend, Progress, Reason},
 };
 use peios::{
@@ -11,8 +11,8 @@ use peios::{
     token::{Claim, ClaimAttr, ClaimValues},
 };
 use peios_auth::{
-    fields, Answer, AuthenticateRequest, Authenticated, AuthenticationRequest, Capabilities,
-    ClaimSelection, ClaimValue, Field, Operation,
+    Answer, AuthenticateRequest, Authenticated, AuthenticationRequest, Capabilities,
+    ClaimSelection, ClaimValue, Field, Operation, fields,
 };
 use radius_core::{Credential, Verification};
 use zeroize::Zeroizing;
@@ -196,6 +196,17 @@ fn authentication_failure(error: &peios_auth::Error) -> Reason {
 }
 
 fn policy_facts(identity: &Authenticated) -> Result<radius_policy::Facts, Reason> {
+    policy_facts_record(
+        &identity.identity,
+        identity.claim_coverage,
+        &identity.absent_claims,
+    )
+}
+pub(super) fn policy_facts_record(
+    identity: &peios_auth::Record,
+    coverage: peios_auth::ClaimCoverage,
+    absent: &[String],
+) -> Result<radius_policy::Facts, Reason> {
     use radius_policy::{Facts, Scalar};
     let sid = |b: &[u8]| {
         SidRef::from_bytes(b)
@@ -203,22 +214,21 @@ fn policy_facts(identity: &Authenticated) -> Result<radius_policy::Facts, Reason
             .ok_or(Reason::MissingContext)
     };
     let mut facts = Facts::new();
-    facts.claim_coverage = match identity.claim_coverage {
+    facts.claim_coverage = match coverage {
         peios_auth::ClaimCoverage::Complete => radius_policy::ClaimCoverage::Complete,
         peios_auth::ClaimCoverage::Filtered => radius_policy::ClaimCoverage::Filtered,
         _ => return Err(Reason::MissingContext),
     };
-    facts.absent_claims = identity
-        .absent_claims
+    facts.absent_claims = absent
         .iter()
         .map(|n| radius_policy::claim_name(n))
         .collect();
-    facts.insert("Subject.User".into(), vec![sid(&identity.identity.sid)?]);
+    facts.insert("Subject.User".into(), vec![sid(&identity.sid)?]);
     facts.insert(
         "Subject.Name".into(),
-        vec![Scalar::String(identity.identity.name.clone())],
+        vec![Scalar::String(identity.name.clone())],
     );
-    let Some(Field::References(groups)) = identity.identity.fields.get(&fields::GROUPS) else {
+    let Some(Field::References(groups)) = identity.fields.get(&fields::GROUPS) else {
         return Err(Reason::MissingContext);
     };
     facts.insert(
@@ -228,7 +238,7 @@ fn policy_facts(identity: &Authenticated) -> Result<radius_policy::Facts, Reason
             .map(|g| sid(&g.sid))
             .collect::<Result<_, _>>()?,
     );
-    let Some(Field::Claims(claims)) = identity.identity.fields.get(&fields::CLAIMS) else {
+    let Some(Field::Claims(claims)) = identity.fields.get(&fields::CLAIMS) else {
         return Err(Reason::MissingContext);
     };
     for raw in claims {
@@ -267,10 +277,27 @@ pub fn evaluate(
     network_id: &str,
     network: &Network,
 ) -> Result<(), Reason> {
+    evaluate_record(
+        &identity.identity,
+        identity.claim_coverage,
+        &identity.absent_claims,
+        network_id,
+        network,
+        true,
+    )
+}
+pub(super) fn evaluate_record(
+    identity: &peios_auth::Record,
+    coverage: peios_auth::ClaimCoverage,
+    absent_claims: &[String],
+    network_id: &str,
+    network: &Network,
+    audit: bool,
+) -> Result<(), Reason> {
     let sd = SecurityDescriptor::from_validated_bytes(network.security.clone())
         .map_err(|_| Reason::Policy)?;
-    let user = SidRef::from_bytes(&identity.identity.sid).ok_or(Reason::MissingContext)?;
-    let Some(Field::References(memberships)) = identity.identity.fields.get(&fields::GROUPS) else {
+    let user = SidRef::from_bytes(&identity.sid).ok_or(Reason::MissingContext)?;
+    let Some(Field::References(memberships)) = identity.fields.get(&fields::GROUPS) else {
         return Err(Reason::MissingContext);
     };
     let groups = memberships
@@ -282,19 +309,19 @@ pub fn evaluate(
             })
         })
         .collect::<Result<Vec<_>, Reason>>()?;
-    let Some(Field::Claims(claims)) = identity.identity.fields.get(&fields::CLAIMS) else {
+    let Some(Field::Claims(claims)) = identity.fields.get(&fields::CLAIMS) else {
         return Err(Reason::MissingContext);
     };
     let claims = claims
         .iter()
         .map(convert_claim)
         .collect::<Result<Vec<_>, _>>()?;
-    let coverage = match identity.claim_coverage {
+    let coverage = match coverage {
         peios_auth::ClaimCoverage::Complete => ClaimCoverage::Complete,
         peios_auth::ClaimCoverage::Filtered => ClaimCoverage::Partial,
         _ => return Err(Reason::MissingContext),
     };
-    let absent: Vec<_> = identity.absent_claims.iter().map(String::as_str).collect();
+    let absent: Vec<_> = absent_claims.iter().map(String::as_str).collect();
     let subject = SuppliedSubject {
         user: Some(user),
         groups: Some(&groups),
@@ -315,6 +342,7 @@ pub fn evaluate(
     .map_err(|_| Reason::AccessCheck)?;
     match AccessCheck::new(&sd, AccessMask::from_bits_retain(CONNECT), mapping)
         .audit_context(&context)
+        .subject_no_audit(!audit)
         .check_subject(&subject)
         .map_err(|error| match error.raw_os_error() {
             Some(libc::ENOSYS | libc::EOPNOTSUPP) => Reason::KernelUnsupported,

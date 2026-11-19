@@ -1,10 +1,10 @@
 //! One owner commits accounting facts, interpretation and budget evidence.
 use crate::{
-    model::{Grant, Observation, Receipt, Session, Settings, State},
-    quota::{interval_usage, Balance, Budget, Dimension},
     Error, Result,
+    model::{Grant, Observation, Receipt, Session, Settings, State},
+    quota::{Balance, Budget, Dimension, interval_usage},
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-const SCHEMA: i64 = 1;
+const SCHEMA: i64 = 2;
 const APPLICATION: i64 = 0x52414441;
 type PriorReceipt = (String, Option<String>, String, i64, Vec<u8>);
 
@@ -38,7 +38,48 @@ pub struct Annotation {
     pub note: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandStep {
+    pub action: crate::dynamic::Action,
+    pub state: String,
+    pub attempts: u32,
+    pub at_ms: i64,
+    pub first_sent_ms: Option<i64>,
+    pub error_cause: Option<u32>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Command {
+    #[serde(default)]
+    pub intent_key: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub requested_action: crate::dynamic::Action,
+    #[serde(default)]
+    pub first_sent_ms: Option<i64>,
+    #[serde(default)]
+    pub not_before_ms: i64,
+    #[serde(default)]
+    pub validation_error: Option<String>,
+    #[serde(default)]
+    pub action: crate::dynamic::Action,
+    #[serde(default)]
+    pub fallback: Vec<crate::dynamic::Action>,
+    #[serde(default)]
+    pub configuration: String,
+    #[serde(default)]
+    pub proof: Vec<u8>,
+    #[serde(default)]
+    pub target: Option<crate::dynamic::Target>,
+    #[serde(default)]
+    pub desired: Option<crate::dynamic::Authorization>,
+    #[serde(default)]
+    pub packet: Vec<u8>,
+    #[serde(default)]
+    pub secret_fingerprint: Vec<u8>,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub history: Vec<CommandStep>,
     pub id: String,
     pub session: String,
     pub actor: String,
@@ -138,7 +179,7 @@ impl Store {
         let version: i64 = self
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if (app != 0 && app != APPLICATION) || !matches!(version, 0 | SCHEMA) {
+        if (app != 0 && app != APPLICATION) || !matches!(version, 0 | 1 | SCHEMA) {
             return Err(Error::Configuration(
                 "foreign or unsupported ledger schema".into(),
             ));
@@ -177,11 +218,19 @@ impl Store {
           CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, expires INTEGER NOT NULL, data BLOB NOT NULL);
           CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY, data BLOB NOT NULL);
           CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, session TEXT NOT NULL, state TEXT NOT NULL, data BLOB NOT NULL);
-          CREATE UNIQUE INDEX IF NOT EXISTS one_pending_disconnect ON commands(session) WHERE state IN ('pending','sent','uncertain');
           CREATE TABLE IF NOT EXISTS annotations (id TEXT PRIMARY KEY, session TEXT NOT NULL, data BLOB NOT NULL);
           CREATE TABLE IF NOT EXISTS capture (id TEXT PRIMARY KEY, at INTEGER NOT NULL, packet BLOB NOT NULL);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS maintenance (id INTEGER PRIMARY KEY CHECK(id=1),at INTEGER NOT NULL); INSERT OR IGNORE INTO maintenance VALUES(1,0);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS corrections(id TEXT PRIMARY KEY,session TEXT NOT NULL,data BLOB NOT NULL);")?;
+        // Version 2 adds independent live reevaluation state. Historical JSON
+        // records decode without proof; never infer a baseline during upgrade.
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS reconciliations(session TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,data BLOB NOT NULL);")?;
+        if version < 2 {
+            tx.execute_batch("DROP INDEX IF EXISTS one_pending_disconnect;")?;
+        }
+        tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS one_pending_control ON commands(session) WHERE state IN ('pending','sent');")?;
+        tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS control_request ON commands(json_extract(CAST(data AS TEXT),'$.actor'),json_extract(CAST(data AS TEXT),'$.request_id')) WHERE json_extract(CAST(data AS TEXT),'$.request_id') IS NOT NULL;")?;
+        tx.execute_batch("CREATE INDEX IF NOT EXISTS control_intent ON commands(session,json_extract(CAST(data AS TEXT),'$.actor'),json_extract(CAST(data AS TEXT),'$.intent_key'));")?;
         tx.execute_batch(&format!(
             "PRAGMA application_id={APPLICATION}; PRAGMA user_version={SCHEMA};"
         ))?;
@@ -294,6 +343,12 @@ impl Store {
             canonical.name = None;
         }
         let grant = &canonical;
+        if let Some(proof) = &grant.proof {
+            proof.validate()?;
+            if proof.grant != grant.reference || proof.authenticated_ms != grant.issued_ms {
+                return Err(Error::Malformed);
+            }
+        }
         self.capacity()?;
         if grant.reference.is_empty()
             || grant.reference.len() > 253
@@ -377,6 +432,39 @@ impl Store {
     }
     pub fn balances(&self, grant: &Grant, now: i64) -> Result<Vec<Balance>> {
         balances(&self.connection, grant, now, None, false)
+    }
+    /// Complete the reservation with precisely the authorization about to be
+    /// emitted. The caller waits for this commit before issuing Class.
+    pub fn bind_grant(&mut self, proof: &crate::dynamic::Proof) -> Result<()> {
+        proof.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let data: Vec<u8> = tx.query_row(
+            "SELECT data FROM grants WHERE reference=?",
+            [&proof.grant],
+            |r| r.get(0),
+        )?;
+        let mut grant: Grant = serde_json::from_slice(&data)?;
+        let mut proof = proof.clone();
+        if let Some(existing) = &grant.proof {
+            proof.sequence = existing.sequence;
+            if existing != &proof {
+                return Err(Error::Integrity);
+            }
+            return Ok(());
+        }
+        if grant.issued_ms != proof.authenticated_ms {
+            return Err(Error::Integrity);
+        }
+        proof.sequence = advance(&tx)?;
+        grant.proof = Some(proof.clone());
+        tx.execute(
+            "UPDATE grants SET data=? WHERE reference=?",
+            params![serde_json::to_vec(&grant)?, proof.grant],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
     pub fn session(&self, id: &str) -> Result<Option<Session>> {
         self.connection
@@ -511,6 +599,26 @@ impl Store {
             return Ok(serde_json::from_slice(&b)?);
         }
         let command = Command {
+            intent_key: String::new(),
+            request_id: None,
+            requested_action: crate::dynamic::Action::Disconnect,
+            first_sent_ms: None,
+            not_before_ms: 0,
+            validation_error: None,
+            action: crate::dynamic::Action::Disconnect,
+            fallback: vec![],
+            configuration: String::new(),
+            proof: s
+                .proof
+                .as_ref()
+                .map(|p| p.grant.clone())
+                .unwrap_or_default(),
+            target: Some(crate::dynamic::Target::from_session(&s)?),
+            desired: None,
+            packet: vec![],
+            secret_fingerprint: vec![],
+            port: 0,
+            history: vec![],
             id: crate::id()?,
             session: session.into(),
             actor: actor.into(),
@@ -534,8 +642,180 @@ impl Store {
     pub fn commands(&self) -> Result<Vec<Command>> {
         read_json(
             &self.connection,
-            "SELECT data FROM commands WHERE state IN ('pending','sent') ORDER BY id LIMIT 128",
+            &format!(
+                "SELECT data FROM commands WHERE state IN ('pending','sent') AND coalesce(json_extract(CAST(data AS TEXT),'$.not_before_ms'),0)<={} ORDER BY id LIMIT 128",
+                crate::worker::now_ms()
+            ),
         )
+    }
+    pub fn enqueue_dynamic(&mut self, intent: crate::dynamic::Intent, now: i64) -> Result<Command> {
+        use crate::dynamic::Action;
+        let crate::dynamic::Intent {
+            intent_key,
+            request_id,
+            session,
+            actor,
+            reason,
+            action,
+            configuration,
+            desired,
+            fallback,
+        } = intent;
+        let rank = |action| match action {
+            Action::UpdateAuthorization => 0,
+            Action::Reauthenticate => 1,
+            Action::Disconnect => 2,
+        };
+        let mut previous = rank(action);
+        for next in &fallback {
+            if rank(*next) <= previous {
+                return Err(Error::Malformed);
+            }
+            previous = rank(*next);
+        }
+        if let Some(request) = &request_id {
+            if request.is_empty() || request.len() > 128 {
+                return Err(Error::Malformed);
+            }
+            let data:Option<Vec<u8>>=self.connection.query_row("SELECT data FROM commands WHERE json_extract(CAST(data AS TEXT),'$.actor')=? AND json_extract(CAST(data AS TEXT),'$.request_id')=?",params![actor,request],|r|r.get(0)).optional()?;
+            if let Some(data) = data {
+                let command: Command = serde_json::from_slice(&data)?;
+                if command.session != session || command.requested_action != action {
+                    return Err(Error::Integrity);
+                }
+                return Ok(command);
+            }
+        }
+        let session = session.as_str();
+        let actor = actor.as_str();
+        let reason = reason.as_str();
+        let configuration = configuration.as_str();
+        if configuration.len() != 64
+            || intent_key.len() > 128
+            || fallback.len() > 2
+            || reason.len() > 256
+            || actor.is_empty()
+            || actor.len() > 192
+        {
+            return Err(Error::Malformed);
+        }
+        if action != Action::Disconnect {
+            desired.as_ref().ok_or(Error::Malformed)?.validate()?;
+        }
+        let s = self.session(session)?.ok_or(Error::Malformed)?;
+        let target = crate::dynamic::Target::from_session(&s)?;
+        if actor == "radiusd" {
+            // Deduplication must outlive the bounded history presentation page.
+            let proof = serde_json::to_string(
+                &s.proof
+                    .as_ref()
+                    .map(|p| p.grant.clone())
+                    .unwrap_or_default(),
+            )?;
+            let action_json = serde_json::to_value(action)?;
+            let data: Option<Vec<u8>> = self.connection.query_row(
+                "SELECT data FROM commands WHERE session=? AND json_extract(CAST(data AS TEXT),'$.actor')=? AND coalesce(json_extract(CAST(data AS TEXT),'$.intent_key'),'')=? AND coalesce(json_extract(CAST(data AS TEXT),'$.requested_action'),'disconnect')=? AND json_extract(CAST(data AS TEXT),'$.reason')=? AND json_extract(CAST(data AS TEXT),'$.proof')=? AND state!='superseded' AND (json_extract(CAST(data AS TEXT),'$.configuration')=? OR state!='pending' OR json_extract(CAST(data AS TEXT),'$.attempts')!=0) ORDER BY rowid DESC LIMIT 1",
+                params![session, actor, intent_key, action_json.as_str().ok_or(Error::Malformed)?, reason, proof, configuration], |r|r.get(0)).optional()?;
+            if let Some(data) = data {
+                return Ok(serde_json::from_slice(&data)?);
+            }
+        }
+        let pending: Vec<Command> = self
+            .command_history(session)?
+            .into_iter()
+            .filter(|c| matches!(c.state.as_str(), "pending" | "sent"))
+            .collect();
+        for mut c in pending {
+            if actor != "radiusd" {
+                return Err(Error::Configuration(
+                    "a session control is already queued".into(),
+                ));
+            }
+            if c.state == "sent" || c.attempts != 0 {
+                return Ok(c);
+            }
+            c.state = "superseded".into();
+            self.command_result(&c)?;
+        }
+        let command = Command {
+            intent_key,
+            request_id,
+            requested_action: action,
+            first_sent_ms: None,
+            not_before_ms: 0,
+            validation_error: None,
+            id: crate::id()?,
+            session: session.into(),
+            actor: actor.into(),
+            created_ms: now,
+            state: "pending".into(),
+            attempts: 0,
+            reason: reason.into(),
+            error_cause: None,
+            action,
+            fallback,
+            configuration: configuration.into(),
+            proof: s
+                .proof
+                .as_ref()
+                .map(|p| p.grant.clone())
+                .unwrap_or_default(),
+            target: Some(target),
+            desired,
+            packet: vec![],
+            secret_fingerprint: vec![],
+            port: 0,
+            history: vec![],
+        };
+        self.connection.execute(
+            "INSERT INTO commands VALUES(?,?,?,?)",
+            params![
+                command.id,
+                session,
+                command.state,
+                serde_json::to_vec(&command)?
+            ],
+        )?;
+        Ok(command)
+    }
+    pub fn command_request(&self, actor: &str, request: &str) -> Result<Option<Command>> {
+        if actor.len() > 192 || request.is_empty() || request.len() > 128 {
+            return Err(Error::Malformed);
+        }
+        let data:Option<Vec<u8>>=self.connection.query_row("SELECT data FROM commands WHERE json_extract(CAST(data AS TEXT),'$.actor')=? AND json_extract(CAST(data AS TEXT),'$.request_id')=?",params![actor,request],|r|r.get(0)).optional()?;
+        data.map(|b| serde_json::from_slice(&b).map_err(Into::into))
+            .transpose()
+    }
+    pub fn reconciliation(&self, session: &str) -> Result<crate::dynamic::Reconciliation> {
+        let bytes: Option<Vec<u8>> = self
+            .connection
+            .query_row(
+                "SELECT data FROM reconciliations WHERE session=?",
+                [session],
+                |r| r.get(0),
+            )
+            .optional()?;
+        bytes
+            .map(|b| serde_json::from_slice(&b).map_err(Into::into))
+            .unwrap_or_else(|| Ok(Default::default()))
+    }
+    pub fn reconciled(
+        &mut self,
+        session: &str,
+        state: &crate::dynamic::Reconciliation,
+    ) -> Result<()> {
+        if state.status.len() > 256 || state.configuration.len() > 64 {
+            return Err(Error::Malformed);
+        }
+        // Stable observations do not need another full fsync every scan.
+        // checked_ms is the last durably recorded evaluation, not a heartbeat.
+        let mut existing = self.reconciliation(session)?;
+        existing.checked_ms = state.checked_ms;
+        if existing == *state {
+            return Ok(());
+        }
+        self.connection.execute("INSERT INTO reconciliations VALUES(?,?) ON CONFLICT(session) DO UPDATE SET data=excluded.data", params![session, serde_json::to_vec(state)?])?;
+        Ok(())
     }
     pub fn command_history(&self, session: &str) -> Result<Vec<Command>> {
         let mut stmt = self
@@ -548,6 +828,38 @@ impl Store {
         rows
     }
     pub fn command_result(&mut self, command: &Command) -> Result<()> {
+        let stored: Vec<u8> = self.connection.query_row(
+            "SELECT data FROM commands WHERE id=?",
+            [&command.id],
+            |r| r.get(0),
+        )?;
+        let current: Command = serde_json::from_slice(&stored)?;
+        if !matches!(current.state.as_str(), "pending" | "sent")
+            || current.intent_key != command.intent_key
+            || current.request_id != command.request_id
+            || current.requested_action != command.requested_action
+            || current.session != command.session
+            || current.actor != command.actor
+            || current.created_ms != command.created_ms
+            || current.reason != command.reason
+        {
+            return Err(Error::Integrity);
+        }
+        if command.state == "sent" {
+            let session = self.session(&command.session)?.ok_or(Error::Malformed)?;
+            if session.end_ms.is_some()
+                || command.proof
+                    != session
+                        .proof
+                        .as_ref()
+                        .map(|p| p.grant.clone())
+                        .unwrap_or_default()
+                || crate::dynamic::Target::from_session(&session).ok().as_ref()
+                    != command.target.as_ref()
+            {
+                return Err(Error::Integrity);
+            }
+        }
         self.connection.execute(
             "UPDATE commands SET state=?,data=? WHERE id=?",
             params![command.state, serde_json::to_vec(command)?, command.id],
@@ -651,6 +963,11 @@ impl Store {
         let revision = advance(&tx)?;
         let anchors: Vec<Session> =
             read_json(&tx, "SELECT projection FROM checkpoints ORDER BY session")?;
+        let reevaluations: Vec<(String, Vec<u8>)> = {
+            let mut query = tx.prepare("SELECT session,data FROM reconciliations")?;
+            let rows = query.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
         tx.execute(
             "INSERT INTO annotations VALUES(?,?,?)",
             params![
@@ -731,6 +1048,9 @@ impl Store {
                 params![session, disposition, projection, id],
             )?;
         }
+        for (session, data) in reevaluations {
+            tx.execute("INSERT INTO reconciliations SELECT ?,? WHERE EXISTS(SELECT 1 FROM sessions WHERE id=?)", params![session, data, session])?;
+        }
         let now: i64 = tx.query_row("SELECT at FROM maintenance WHERE id=1", [], |r| r.get(0))?;
         let active: Vec<Session> = read_json(&tx, "SELECT data FROM sessions WHERE ended IS NULL")?;
         for mut s in active {
@@ -806,6 +1126,7 @@ impl Store {
         let mut commands = 0;
         for budget in budgets.into_iter().filter(|b| b.disconnect) {
             let grant = Grant {
+                proof: None,
                 reference: Vec::new(),
                 client: String::new(),
                 policy: budget.policy.clone().unwrap_or_default(),
@@ -1011,10 +1332,12 @@ fn recognised_grant(tx: &Transaction<'_>, o: &Observation) -> Result<Option<Gran
             {
                 return Err(Error::Integrity);
             }
-            if found
-                .as_ref()
-                .is_none_or(|g| grant.issued_ms >= g.issued_ms)
-            {
+            if found.as_ref().is_none_or(|g| {
+                (
+                    grant.proof.as_ref().map_or(0, |p| p.sequence),
+                    grant.issued_ms,
+                ) >= (g.proof.as_ref().map_or(0, |p| p.sequence), g.issued_ms)
+            }) {
                 found = Some(grant);
             }
         }
@@ -1242,6 +1565,8 @@ fn interpret(
             warnings.push("missing-start".into());
         }
         Session {
+            observed: crate::dynamic::Observed::from_attributes(&o.attributes, o.effective_ms),
+            proof: grant.as_ref().and_then(|g| g.proof.clone()),
             id: observation_id.into(),
             client: o.client.clone(),
             nas: o.nas.clone(),
@@ -1306,6 +1631,11 @@ fn interpret(
     // Late evidence cannot reopen an ended occurrence or regress a counter.
     let latest = o.effective_ms >= s.last_ms;
     if latest {
+        if let Some(observed) =
+            crate::dynamic::Observed::from_attributes(&o.attributes, o.effective_ms)
+        {
+            s.observed = Some(observed);
+        }
         if let Some(g) = &grant {
             if s.groups != g.groups && !fresh && s.kind == "session" {
                 let edge = g.issued_ms.max(s.last_ms).min(o.effective_ms);
@@ -1381,6 +1711,13 @@ fn interpret(
         }
     }
     if let Some(g) = grant {
+        if latest
+            && g.proof
+                .as_ref()
+                .is_some_and(|p| s.proof.as_ref().is_none_or(|old| p.sequence > old.sequence))
+        {
+            s.proof = g.proof.clone();
+        }
         if s.sid.is_none() && fresh {
             s.sid = Some(g.sid.clone());
             s.groups = g.groups.clone();

@@ -53,6 +53,30 @@ repository README. The Rust checks exercise malformed/truncated packets,
 duplicate attributes, conversation quotas, idle and overall deadlines,
 binding changes, one-shot admission and rejection without key delivery.
 
+## Native session controls
+
+In a fresh, isolated guest, run `tests/native/setup.sh`, then
+`tests/native/session-controls.sh` and `tests/native/automatic-controls.sh`.
+Supply the compiled `native-session-controls` example, the native-policy test
+binary, and the independent supplicant in `/mnt/dev/bin`, with the fixture
+credentials under `/mnt/dev/credentials`. These scripts require
+`PEIOS_DISPOSABLE_RADIUS_TEST=yes` and `RADIUS_DEV_RUNTIME=1`. They change
+accounts, policy, service definitions, and the ledger; use no deployed state
+or LAN interface.
+
+The checks exercise actual caller tokens, separate action and fallback
+permissions, protected credential metadata, password revision changes,
+maintenance stability, exact-session CoA and Disconnect, forged replies,
+durable request IDs, restart, rebuild, and real PEAP/TTLS authentication.
+Automatic cases use direct Registry VLAN edits, account disablement, password
+replacement with an explicit Disconnect fallback, and opt-in CoA updates.
+The generic profile does not claim fresh reauthentication support.
+
+A migration fixture can seed accounts with a previously qualified format-6
+lpsd before switching to the new runtime. Set
+`RADIUS_QUALIFY_LEGACY_STORE=1` only for that arrangement. Fresh-store checks
+do not exercise the old-store upgrade.
+
 ## Limits of the evidence
 
 Passing this gate establishes host-side protocol behavior for the tested

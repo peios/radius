@@ -5,7 +5,7 @@ use crate::{
 };
 use peios::{
     file::{fd_get_sd, SecInfo},
-    security::{sddl, AceType, Sid, WellKnown},
+    security::{sddl, AceType, SecurityDescriptor, Sid, WellKnown},
 };
 use std::{
     fs::OpenOptions,
@@ -82,7 +82,6 @@ pub fn material(path: &str, secret: bool, max: usize) -> io::Result<Zeroizing<Ve
 
 const DIRECTORY: &str = "/var/state/radius/credentials";
 pub fn provision_directory() -> io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
     for path in ["/var/state/radius", DIRECTORY] {
         match std::fs::symlink_metadata(path) {
             Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => continue,
@@ -90,26 +89,29 @@ pub fn provision_directory() -> io::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
-        // Native open does not support creating directories on this kernel.
-        // Create privately, seal its SD before publishing any credential files,
-        // and preserve the policy of directories that already existed.
-        std::fs::DirBuilder::new().mode(0o700).create(path)?;
+        // Created carrying its SD, so it is never visible without it, and
+        // directories that already existed keep their policy.
         let sd = sddl::parse(&format!(
             "O:BAG:BAD:P(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)(A;OICI;GRGX;;;{SERVICE_SID})"
         ))
         .map_err(io::Error::from)?;
-        let directory = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(path)?;
-        peios::file::fd_set_sd(
-            directory.as_fd(),
-            SecInfo::OWNER | SecInfo::GROUP | SecInfo::DACL,
-            &sd,
-        )
-        .map_err(|e| io::Error::new(e.kind(), format!("cannot protect {path}: {e}")))?;
+        create_directory(path, &sd)?;
     }
     Ok(())
+}
+/// Create the directory `path` with `sd` supplied to the create. The handle is
+/// a control handle, with no data right: nothing is read from it.
+pub(super) fn create_directory(path: &str, sd: &SecurityDescriptor) -> io::Result<()> {
+    use peios::file::{CreateOptions, Disposition, FileAccess, OpenFlags};
+    peios::file::OpenOptions::new()
+        .desired_access(FileAccess::READ_ATTRIBUTES | FileAccess::SYNCHRONIZE)
+        .disposition(Disposition::Create)
+        .options(CreateOptions::DIRECTORY)
+        .flags(OpenFlags::SYMLINK_NOFOLLOW)
+        .creator_sd(sd)
+        .create(None, Path::new(path))
+        .map(drop)
+        .map_err(|e| io::Error::new(e.kind(), format!("cannot create {path}: {e}")))
 }
 pub fn read_input(path: &str, max: usize) -> io::Result<Zeroizing<Vec<u8>>> {
     let mut file = OpenOptions::new()

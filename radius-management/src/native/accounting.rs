@@ -159,20 +159,19 @@ fn verify_private(file: &std::fs::File) -> io::Result<()> {
 }
 /// Explicit administrative provisioning; never relax an existing directory.
 pub fn provision_directory() -> io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     super::credentials::provision_directory()?;
     match std::fs::symlink_metadata(DIRECTORY) {
         Ok(_) => return verify_directory(),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    std::fs::DirBuilder::new().mode(0o700).create(DIRECTORY)?;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(DIRECTORY)?;
-    let sd=peios::security::sddl::parse(&format!("O:{SERVICE_SID}G:{SERVICE_SID}D:P(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)(A;OICI;GA;;;{SERVICE_SID})")).map_err(err)?;
-    peios::file::fd_set_sd(file.as_fd(), peios::file::SecInfo::DACL, &sd).map_err(err)?;
+    // Created carrying its DACL. No owner is supplied, so the administrator
+    // creating it owns it, as when only the DACL was stamped afterwards.
+    let sd = peios::security::sddl::parse(&format!(
+        "D:P(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)(A;OICI;GA;;;{SERVICE_SID})"
+    ))
+    .map_err(err)?;
+    super::credentials::create_directory(DIRECTORY, &sd)?;
     verify_directory()
 }
 impl Service {

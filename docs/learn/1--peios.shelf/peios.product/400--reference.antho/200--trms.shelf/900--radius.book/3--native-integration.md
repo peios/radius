@@ -25,6 +25,13 @@ The native Cargo feature links the matching public `libauth.so.1` and
 headers from pinned canonical source revisions. A development guest
 must load these matching libraries rather than older image copies.
 
+Fresh state-directory provisioning requires a kernel with KACS control
+handles: native opens that request no data rights. The administrator creates
+each directory carrying its security descriptor. Older kernels reject this
+open with `EINVAL`; provisioning does not fall back to creating an unprotected
+directory and setting its descriptor afterward. Existing directories keep
+their descriptors.
+
 The current bindings require authd's PGSS version 6 protocol and libauth
 ABI 6. The shared-library filename remains `libauth.so.1`, so successful
 loader resolution alone does not establish compatibility; the bindings

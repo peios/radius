@@ -169,7 +169,10 @@ not substitute the default descriptor for an unreadable configuration. The
 default applies only when a successful read finds no explicit setting.
 
 Run `radius accounting init` as an administrator to provision the private
-directory. Existing directories and ledger files must already have trusted
+directory. Creation supplies its private descriptor atomically and requires
+the KACS control-handle support described in
+[Native Integration](~peios/reference/radius/native-integration).
+Existing directories and ledger files must already have trusted
 owners and private descriptors. SQLite also needs ReadAttributes on its path
 prefixes. On a restrictive `/var/state`, grant the service only mask `0x80`
 without inheritance; do not grant directory listing or broad data access.

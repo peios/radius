@@ -163,6 +163,11 @@ attempts.
 
 ## Administration and diagnostics
 
+The accounting status query reads `AccountingSecurity` before checking the
+caller's token. A failed Registry read makes the query unavailable; it does
+not substitute the default descriptor for an unreadable configuration. The
+default applies only when a successful read finds no explicit setting.
+
 Run `radius accounting init` as an administrator to provision the private
 directory. Existing directories and ledger files must already have trusted
 owners and private descriptors. SQLite also needs ReadAttributes on its path

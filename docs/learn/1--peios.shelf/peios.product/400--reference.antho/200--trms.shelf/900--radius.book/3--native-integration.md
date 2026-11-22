@@ -146,9 +146,13 @@ unauthorized status endpoint. See
 The loader copies Registry configuration through one short read-only
 transaction, including key resolution, enumeration, values, and layer
 selection.
-It releases the snapshot before opening credential files. Capture races and
-other read errors discard the complete candidate; the worker retries on its
-normal reload cycle and keeps admission paused while configuration is invalid.
+It releases the snapshot before opening credential files. Capture races
+discard the complete candidate and retry a fresh read within a 250 ms
+retry budget. That budget limits additional attempts; it does not interrupt a
+Registry call already in progress. Other read errors return immediately.
+If capture still fails, the worker retries on its normal reload cycle and
+keeps admission paused while configuration is invalid. Writes are not retried
+by this read helper.
 Watches and fingerprints detect changes but do not establish read consistency.
 Prepare protected immutable credential files, then transactionally switch
 references. Keep old files until safely unused; a Registry transaction does

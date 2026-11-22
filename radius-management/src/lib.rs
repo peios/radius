@@ -8,5 +8,7 @@ pub mod dynamic;
 pub mod model;
 #[cfg(feature = "native")]
 pub mod native;
+#[cfg(any(feature = "native", test))]
+mod read_retry;
 pub mod runtime;
 pub mod status;

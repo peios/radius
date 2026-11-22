@@ -670,12 +670,16 @@ fn command_view(
     }
     Ok(value)
 }
+fn status_security(stored: io::Result<crate::model::Stored>) -> io::Result<Value> {
+    Ok(stored?
+        .settings
+        .get("AccountingSecurity")
+        .cloned()
+        .unwrap_or_else(|| Value::Text(DEFAULT_SECURITY.into())))
+}
 fn answer(service: &Service, token: &Token, request: Request) -> io::Result<serde_json::Value> {
     if matches!(request, Request::Status) {
-        let security = super::registry::read()
-            .ok()
-            .and_then(|s| s.settings.get("AccountingSecurity").cloned())
-            .unwrap_or_else(|| Value::Text(DEFAULT_SECURITY.into()));
+        let security = status_security(super::registry::read())?;
         if !permitted(token, &security, READ) {
             return Err(err("accounting status denied"));
         }
@@ -1090,4 +1094,35 @@ pub fn query(mut request: Request) -> io::Result<serde_json::Value> {
             .map(|s| s.chars().take(512).collect::<String>())
             .unwrap_or_else(|| "accounting request unavailable or denied".into()))
     })
+}
+
+#[cfg(test)]
+mod status_security_tests {
+    use super::*;
+    use crate::model::Stored;
+
+    #[test]
+    fn unavailable_registry_cannot_substitute_default_status_permissions() {
+        for kind in [
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::TimedOut,
+        ] {
+            assert_eq!(status_security(Err(kind.into())).unwrap_err().kind(), kind);
+        }
+    }
+
+    #[test]
+    fn default_is_only_for_a_successfully_read_missing_setting() {
+        assert_eq!(
+            status_security(Ok(Stored::default())).unwrap(),
+            Value::Text(DEFAULT_SECURITY.into())
+        );
+        let mut stored = Stored::default();
+        let custom = Value::Text("O:SYG:SYD:(A;;0x1;;;SY)".into());
+        stored
+            .settings
+            .insert("AccountingSecurity".into(), custom.clone());
+        assert_eq!(status_security(Ok(stored)).unwrap(), custom);
+    }
 }

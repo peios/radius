@@ -1,0 +1,103 @@
+.TH RADIUSD 8 2026-11-23 "Peios radius 0.1.0"
+.SH NAME
+radiusd \- the Peios RADIUS service, which authenticates Wi-Fi clients for access points
+.SH SYNOPSIS
+.B radiusd
+.SH DESCRIPTION
+.B radiusd
+is a RADIUS server for WPA-Enterprise Wi-Fi.
+Access points send it each client's EAP conversation, and it decides whether the person may join the network.
+It accepts PEAP with MSCHAPv2, and TTLS with PAP, and has
+.BR authd (8)
+verify each password or MSCHAPv2 response.
+It never sees a reusable password hash, and creates no token or logon session.
+.PP
+A person is admitted by the access policy for the network's SSID: its Connect security descriptor is checked against the verified person's SID, groups and claims, in the kernel, and an assignment rule may give their session settings such as a VLAN.
+An Access-Accept asks the access point to reauthenticate the client after an hour by default.
+.B radiusd
+can also take accounting records, and send Disconnect and Change-of-Authorization requests for the sessions they describe.
+.PP
+peinit starts
+.B radiusd
+as the
+.B radiusd
+service, under its own virtual service account; you do not run it yourself.
+It refuses to start under any other identity, and takes no arguments.
+Manage it, and its configuration, with
+.BR radius (8).
+.SH CONFIGURATION
+.B radiusd
+reads its configuration from the Registry under
+.BR Machine\eSoftware\eRadius ,
+which
+.B radius config init
+creates, and takes up each change as it is written, without restarting.
+While the configuration is invalid it admits nobody, and says why through its status endpoint and its events.
+Its clients' shared secrets, and its server identities' certificates and private keys, are files the configuration names, normally under
+.IR /var/state/radius/credentials .
+Run
+.B regman Machine\eSoftware\eRadius
+for each value.
+.PP
+It listens for authentication on UDP port 1812 of every address by default.
+The radius package reserves UDP ports 1812 and 1813 for it.
+.SH SECURITY
+The service account may ask
+.B authd
+to verify credentials (the
+.B peios.auth.authenticate
+capability), read each person's groups and claims, read its configuration and credential files, and bind its ports.
+It holds SeChangeNotifyPrivilege and SeAuditPrivilege, and nothing else.
+.SH EXIT STATUS
+.TP
+.B 0
+The service stopped.
+.TP
+.B 1
+.B radiusd
+could not start: it was given an argument, it runs under the wrong identity, or it could not open its status endpoint, its accounting ledger or a listener.
+.SH FILES
+.TP
+.I /run/radiusd/control.sock
+The read-only status endpoint
+.B radius status
+reads.
+.TP
+.I /run/radiusd/accounting.sock
+The endpoint
+.B radius
+reads accounting sessions from and sends session controls through.
+.TP
+.I /var/state/radius/credentials
+Shared secrets, certificates and private keys.
+.TP
+.I /var/state/radius/accounting
+The accounting ledger.
+.SH NOTES
+The radius package defines the service, grants its identity what it needs and reserves its ports in the Registry seeds
+.IR radiusd\-service.reg ,
+.I radiusd\-policy.reg
+and
+.IR radiusd\-port.reg .
+The service starts at no time until an administrator runs
+.B radius config init
+and
+.BR "radius service boot on" .
+.PP
+Creating
+.I /var/state/radius
+with its descriptor needs a kernel with KACS control handles; on an older one,
+.B radius config init
+fails rather than create the directory unprotected.
+.SH READINESS
+.B radiusd
+tells peinit it is ready once its status endpoint is listening, even while its configuration is invalid, so that
+.B radius
+can say what is wrong.
+.SH SEE ALSO
+.BR evman (1),
+.BR regman (1),
+.BR authd (8),
+.BR radius (8)
+.PP
+https://learn.peios.org/peios/reference/radius/native-integration

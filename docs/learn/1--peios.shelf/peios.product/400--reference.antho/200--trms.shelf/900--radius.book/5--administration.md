@@ -77,9 +77,12 @@ device capabilities, fallback permissions, and outcome interpretation.
 
 `radius config init` initializes an absent configuration with schema version
 2, empty object collections, and a UDP listener at `0.0.0.0:1812`. It refuses
-an existing deployment. The empty configuration admits nobody. Configure the
-service identity, authd capability, and port reservation separately as
-described in [Native Integration](~peios/reference/radius/native-integration).
+an existing deployment. The empty configuration admits nobody. The radius
+package defines the radiusd service, grants its identity the authd capability,
+and reserves UDP ports 1812 and 1813 for it, as described in
+[Native Integration](~peios/reference/radius/native-integration). The service
+starts at no time until you turn it on with `radius service boot on`, then
+`radius service start`.
 
 Create a server identity first, then a profile, policy, and client. In the
 window, reference pickers show object names and retain their GUIDs. CLI

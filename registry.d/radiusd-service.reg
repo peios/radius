@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "The radiusd service definition.",
+    "",
+    "It has no Triggers value, so installing the package starts nothing: a",
+    "machine authenticates Wi-Fi clients only once an administrator has",
+    "initialised its configuration (radius config init) and turned the",
+    "service on (radius service boot on, or Start at Boot in the window),",
+    "which adds a boot trigger here.",
+    "",
+    "The service must be named radiusd and run as Identity Service: radiusd",
+    "checks at startup that its token's user is radiusd's own service SID.",
+    "authd makes that token, and verifies the passwords radiusd relays, so",
+    "the service requires authd. RequiredPrivileges names everything it",
+    "keeps: SeChangeNotifyPrivilege to traverse directories, and",
+    "SeAuditPrivilege to write its events (radiusd.evman) and the kernel's",
+    "audit of its access checks. radiusd-policy.reg grants both, and the",
+    "authenticate capability, to radiusd's service SID alone.",
+    "",
+    "Readiness is Notify (0): radiusd notifies once its status endpoint,",
+    "/run/radiusd/control.sock, is listening, even while its configuration",
+    "is invalid, so that the radius command can say what is wrong.",
+    "RuntimeDirectories gives it /run/radiusd. Its state under",
+    "/var/state/radius is made, with its descriptors, by radius config init",
+    "and radius accounting init, which an administrator runs.",
+    "",
+    "Shipped by the radius package into /usr/share/regim/; inert until an",
+    "image names it in [registry] autoapply."
+  ],
+  "keys": [
+    { "path": "Machine\\System" },
+    { "path": "Machine\\System\\Services" },
+    {
+      "path": "Machine\\System\\Services\\radiusd",
+      "values": [
+        { "name": "ImagePath", "type": "sz", "data": "/usr/sbin/radiusd" },
+        { "name": "Identity", "type": "sz", "data": "Service" },
+        {
+          "name": "RequiredPrivileges",
+          "type": "multi",
+          "data": ["SeChangeNotifyPrivilege", "SeAuditPrivilege"]
+        },
+        { "name": "Requires", "type": "multi", "data": ["authd"] },
+        { "name": "Readiness", "type": "dword", "data": 0 },
+        { "name": "RuntimeDirectories", "type": "multi", "data": ["radiusd"] },
+        { "name": "RestartPolicy", "type": "dword", "data": 1 },
+        { "name": "ErrorControl", "type": "dword", "data": 0 },
+        { "name": "DisplayName", "type": "sz", "data": "RADIUS" },
+        {
+          "name": "Description",
+          "type": "sz",
+          "data": "Authenticates Wi-Fi clients for access points, with WPA-Enterprise"
+        }
+      ]
+    }
+  ]
+}

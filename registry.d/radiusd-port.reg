@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "The port reservations radiusd's default listeners need: udp:1812 for",
+    "authentication and udp:1813 for accounting, granted to SYSTEM and to",
+    "radiusd's own service SID,",
+    "  S-1-5-80-1653768611-2164381495-1902105107-3452022516-881820819",
+    "so that the reservations follow the service rather than the account it",
+    "happens to run as. Both ports are anyone's without them; a reservation",
+    "keeps another program from taking them first. A listener configured on",
+    "another port needs its own reservation, or none.",
+    "",
+    "Regenerate with tools/gen-port-seed.py; do not hand-edit the hex.",
+    "Shipped by the radius package into /usr/share/regim/; inert until an",
+    "image names it in [registry] autoapply."
+  ],
+  "keys": [
+    {
+      "path": "Machine\\System"
+    },
+    {
+      "path": "Machine\\System\\Network"
+    },
+    {
+      "path": "Machine\\System\\Network\\TcpIp"
+    },
+    {
+      "path": "Machine\\System\\Network\\TcpIp\\PortReservations",
+      "values": [
+        {
+          "name": "udp:1812",
+          "type": "binary",
+          "data": "010004801400000020000000000000002c000000010100000000000512000000010100000000000512000000020044000200000000001400010002000101000000000005120000000000280001000200010600000000000550000000a381926237d7018113d25f71f4aec1cd93848f34"
+        },
+        {
+          "name": "udp:1813",
+          "type": "binary",
+          "data": "010004801400000020000000000000002c000000010100000000000512000000010100000000000512000000020044000200000000001400010002000101000000000005120000000000280001000200010600000000000550000000a381926237d7018113d25f71f4aec1cd93848f34"
+        }
+      ]
+    }
+  ]
+}

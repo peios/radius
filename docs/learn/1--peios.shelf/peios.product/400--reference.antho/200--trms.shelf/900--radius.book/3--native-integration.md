@@ -54,6 +54,13 @@ privileges. `SeChangeNotifyPrivilege` permits ordinary path traversal;
 port-reservation descriptor grants its service SID PORT_BIND for each
 configured listening port. Use peinit's Notify readiness mode.
 
+The radius package provides these as Registry seeds, in `registry.d`:
+`radiusd-service.reg` defines the service, `radiusd-policy.reg` grants its
+account the capability and the two privileges, and `radiusd-port.reg`
+reserves UDP ports 1812 and 1813 for it. The definition has no Triggers, so
+installing the package starts nothing. `radius service boot on` adds a boot
+trigger once the configuration is initialized.
+
 Packet admission is separate from the port reservation. When packet filtering
 is enabled, allow inbound UDP for each configured RADIUS listener. GXWI's
 inbound TCP rule does not also admit RADIUS authentication traffic.

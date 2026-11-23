@@ -5,7 +5,16 @@ import "github.com/peios/peios-rs" as peios_rs
 import build libauth from "github.com/peios/authd"
 
 def crates() -> rust.RustWorkspace {
-    = rust.workspace(dir("."), rust.vendored(file("Cargo.lock")), crates = kernel_settings())
+    = rust.workspace(
+        dir("."), rust.vendored(file("Cargo.lock")),
+        crates = [...kernel_settings(), {package = "radius-management"; data = seeds()}],
+    )
+}
+
+# The Registry seeds the package installs, which radius-management's tests
+# read.
+def seeds() -> List<{at: String, place: Dir | File}> {
+    = [{at = "registry.d"; place = dir("registry.d")}]
 }
 
 # The vendored policy crates read shared semantic sources outside their own
@@ -31,6 +40,7 @@ def native_crates(window: Bool = false) -> rust.RustWorkspace {
             {
                 package = "radius-management"
                 env = [{key = "LIBRARY_PATH"; value = "/opt/peios/lib"}]
+                data = seeds()
                 given = [
                     {at = "/opt/peios/lib/libauth.so"; place = build libauth()},
                     {at = "/opt/peios/lib/libauth.so.1"; place = build libauth()},

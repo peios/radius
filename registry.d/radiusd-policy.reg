@@ -1,0 +1,46 @@
+{
+  "_comment": [
+    "What radiusd's service identity is granted, and nothing else is.",
+    "",
+    "The peios.auth.authenticate capability lets it ask authd to verify a",
+    "password or an MSCHAPv2 response. It is not given peios.auth.logon:",
+    "radiusd creates no token and no logon session. authd's default",
+    "AuthenticationSecurity already grants radiusd ReadGroups and ReadClaim,",
+    "which admission reads; an explicit AuthenticationSecurity replaces that",
+    "default, and must then grant them itself.",
+    "",
+    "SeChangeNotifyPrivilege lets it traverse directories, and",
+    "SeAuditPrivilege lets it write its events (radiusd.evman) and the",
+    "kernel's audit of its access checks.",
+    "",
+    "authd unions the privileges of every SID on a token, and a service",
+    "token carries the S-1-5-80 service SID derived from the service name,",
+    "so a record named for that SID grants these to the one service. The SID",
+    "is SHA-1 of 'RADIUSD' as upper-cased UTF-16LE, read as five",
+    "little-endian u32s (authd/src/service_sid.rs), radius-management's",
+    "SERVICE_SID, which its tests check it against.",
+    "",
+    "Separate from radiusd-service.reg because a grant is a different kind",
+    "of statement from a service definition: an image may review or withhold",
+    "it.",
+    "",
+    "Shipped by the radius package into /usr/share/regim/; inert until an",
+    "image names it in [registry] autoapply."
+  ],
+  "keys": [
+    { "path": "Machine\\Generic" },
+    { "path": "Machine\\Generic\\Authn" },
+    { "path": "Machine\\Generic\\Authn\\Policy" },
+    {
+      "path": "Machine\\Generic\\Authn\\Policy\\S-1-5-80-1653768611-2164381495-1902105107-3452022516-881820819",
+      "values": [
+        { "name": "Capabilities", "type": "multi", "data": ["peios.auth.authenticate"] },
+        {
+          "name": "Privileges",
+          "type": "multi",
+          "data": ["SeChangeNotifyPrivilege", "SeAuditPrivilege"]
+        }
+      ]
+    }
+  ]
+}

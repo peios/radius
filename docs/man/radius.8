@@ -1,0 +1,204 @@
+.TH RADIUS 8 2026-11-23 "Peios radius 0.1.0"
+.SH NAME
+radius \- manage the Peios RADIUS service
+.SH SYNOPSIS
+.B radius \-\-window
+.br
+.B radius
+.RB [ \-\-json ]
+.I command
+.RI [ argument ...]
+.br
+.B radius
+.RB [ \-h | \-\-help ]
+.SH DESCRIPTION
+.B radius
+manages
+.BR radiusd (8):
+its clients, access policies, authentication profiles, server identities, assignment and accounting, and the service itself.
+.B radius \-\-window
+opens the RADIUS window, for the GXWI desktop, which does the same.
+.PP
+Configuration is kept in the Registry under
+.BR Machine\eSoftware\eRadius ,
+and
+.B radius
+writes it directly, as the person running it, so it can do exactly what that person may, and works while
+.B radiusd
+is stopped.
+Saving a change doesn't mean
+.B radiusd
+has taken it up:
+.B radius status
+shows the saved and the effective configuration apart.
+.PP
+Every object has a GUID that never changes, and a name that is only a label: names can be changed, and repeated, so a name that is ambiguous has to be given as its GUID.
+References between objects are always GUIDs.
+.B radius
+refuses to delete an object another refers to, and names the ones that do.
+.SH COMMANDS
+.TP
+.B status
+The service's state, and the saved and effective configuration.
+.TP
+.BR "config init" | show | check
+.B init
+creates an absent configuration: an empty one, which admits nobody, with a UDP listener at
+.BR 0.0.0.0:1812 ,
+and the protected directory
+.I /var/state/radius/credentials
+for credential files.
+It refuses a machine that has a configuration.
+.B show
+prints the configuration and
+.B check
+validates it.
+.TP
+.BI "config set " NAME = VALUE " ..."
+Change global settings.
+.TP
+.BI "client" "|policy|profile|identity|access\-profile|rule|..." " list"
+List the objects of a kind.
+The kinds are
+.BR client ,
+.BR policy " (access policy),"
+.BR profile " (authentication profile),"
+.BR identity " (server identity),"
+.BR access\-profile ,
+.BR rule " (assignment rule),"
+.BR dynamic\-profile " (session control profile),"
+.B quota
+and
+.BR accounting\-profile .
+.TP
+.IB kind " show " name-or-guid
+Show an object.
+.TP
+.IB kind " create " name " \fR[\fB\-\-set \fIfield\fB=\fIvalue\fR] ..."
+.TQ
+.IB kind " set " name-or-guid " \fR[\fB\-\-set \fIfield\fB=\fIvalue\fR] ..."
+.TQ
+.IB kind " unset " name-or-guid " " field " ..."
+.TQ
+.IB kind " delete " name-or-guid
+Create, change and delete objects.
+Lists are comma-separated.
+.TP
+.IB kind " enable" | "disable " name-or-guid
+Enable or disable a client, policy or profile.
+A disabled one denies what it would have admitted, without falling back to another.
+.TP
+.IB kind " permissions " name-or-guid " connect" | "management \fR[\fIsddl\fR]"
+Show or set who may connect through an access policy, or manage an object.
+.TP
+.BI "client secret " name-or-guid " show" | generate | "set \fR[\fB\-\-stdin\fR | \fB\-\-file \fIpath\fR]"
+Show, generate or set a client's shared secret.
+.B set
+without an input option prompts without echo.
+.TP
+.BI "identity import " name-or-guid " \-\-set CertificateFiles=" path ",... \-\-set PrivateKeyFile=" path
+.TQ
+.BI "identity inspect " name-or-guid
+Import a server identity's certificate chain and private key, in PEM or DER, checking that they match, or show its names, issuer, expiry and fingerprint.
+.TP
+.BI "policy explain " name-or-guid " \-\-facts " path
+Explain what the saved policy would do for hypothetical facts, given as typed JSON.
+.TP
+.B access\-profile fields
+.TQ
+.B dynamic\-profile template wispr
+List the typed settings and standard attributes an access profile may set, or print a session control profile with WISPr rate mappings.
+.TP
+.BR "accounting init" | telemetry\-init | status | "sessions \fR[\fIpolicy-guid\fR]"
+Create the private accounting ledger directory, or the service's metric namespace; show accounting's state; list sessions.
+.TP
+.BR "accounting session" | history | related | commands | reconciliation " \fIsession-guid"
+Show a session, its history, the sessions related to it, the commands sent for it, or how its records were reconciled.
+.TP
+.BR "accounting disconnect" | reauthenticate | "update \fIsession-guid\fR [\fB\-\-request\-id \fIid\fR]"
+Send a Disconnect or Change-of-Authorization request for a session.
+Each needs its own right in the accounting security descriptor.
+.TP
+.BR "accounting usage \fIsid\fR [\fIpolicy-guid\fR]"
+A person's usage.
+.TP
+.BI "accounting annotate " "session-guid note"
+.TQ
+.BI "accounting correct\-end " "session-guid unix-milliseconds note " \-\-confirm
+Add a note to a session, or correct when it ended, with the reason.
+.TP
+.B accounting rebuild \-\-confirm
+Rebuild the retained accounting evidence, without sending any session controls.
+.TP
+.BR "diagnostics list" | follow " \fR[\fB\-\-since \fIseconds\fR] [\fIfilters\fR]"
+.TQ
+.BI "diagnostics show " attempt-id
+.TQ
+.BR "diagnostics drops" | status
+Read
+.BR radiusd 's
+record of authentication attempts from the event store, which needs
+.BR eventd (8).
+.TP
+.BR "service start" | stop | restart
+Start, stop or restart
+.BR radiusd .
+Stopping it interrupts authentication; stations already connected keep their access until they reauthenticate.
+.TP
+.BR "service boot on" | off
+Have
+.B radiusd
+start at boot, or not, without starting or stopping it now.
+The radius package defines the service to start at no time.
+.SH OPTIONS
+.TP
+.B \-\-json
+Print the result, or the error, as JSON, with GUIDs and typed error codes.
+A secret shown by
+.B client secret show
+is printed raw, and doesn't take
+.BR \-\-json .
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.B \-\-window
+Open the RADIUS window.
+.SH SETTING UP
+.nf
+.B radius config init
+.BI "radius identity create Main \-\-set CertificateFiles=" chain.pem " \e"
+.BI "    \-\-set PrivateKeyFile=" server.key
+.BI "radius profile create Passwords \-\-set AuthenticationMethods=peap\-mschapv2,ttls\-pap \e"
+.BI "    \-\-set ServerIdentity=" identity-guid
+.BI "radius policy create Household \-\-set SSID=Home \e"
+.BI "    \-\-set AuthenticationProfile=" profile-guid " \e"
+.BI "    \-\-set 'ConnectSecurity=O:SYG:SYD:(A;;0x1;;;" group-sid ")'"
+.BI "radius client create AccessPoints \-\-set Addresses=10.10.0.0/16 \-\-set Policies=" policy-guid
+.B radius service boot on
+.B radius service start
+.fi
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Any other failure.
+.TP
+.B 3
+Permission was denied.
+.TP
+.B 4
+An object was not found.
+.TP
+.B 5
+The configuration is not valid.
+.TP
+.B 64
+An argument was not valid.
+.SH SEE ALSO
+.BR regman (1),
+.BR radiusd (8)
+.PP
+https://learn.peios.org/peios/reference/radius/administration

@@ -21,11 +21,6 @@ subtle = "2.6.1"
 debug = 0
 incremental = false
 
-[replace]
-# RADIUS needs the read-snapshot bindings at b1290db. The SD editor uses its
-# ancestor 7c05d93; keep one peios-sys link identity throughout this program.
-"https://github.com/peios/peios-rs.git#peios:0.4.0" = { git = "https://github.com/peios/peios-rs.git", rev = "b1290dbfa805d4ef151d3fc961a8d89d6c30c12c" }
-
 [profile.release]
 debug = 2
 incremental = false

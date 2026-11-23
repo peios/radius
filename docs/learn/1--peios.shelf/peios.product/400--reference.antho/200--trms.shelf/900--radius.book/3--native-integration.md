@@ -25,6 +25,10 @@ The native Cargo feature links the matching public `libauth.so.1` and
 headers from pinned canonical source revisions. A development guest
 must load these matching libraries rather than older image copies.
 
+The daemon, command-line client and GXWI window use one Peios Rust bindings
+0.5 dependency graph, aligned with the distribution's SDK and service pins.
+Build these clients with their pinned dependencies and matching libraries.
+
 Fresh state-directory provisioning requires a kernel with KACS control
 handles: native opens that request no data rights. The administrator creates
 each directory carrying its security descriptor. Older kernels reject this

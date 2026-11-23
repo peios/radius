@@ -59,7 +59,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "auth-abi"
 version = "0.0.24"
-source = "git+https://github.com/peios/authd.git?rev=c99538e9c93b901eaffec25a3a2ae92bb7086622#c99538e9c93b901eaffec25a3a2ae92bb7086622"
+source = "git+https://github.com/peios/authd.git?rev=327ce68648e1594331c88a457afb261f9000b4c3#327ce68648e1594331c88a457afb261f9000b4c3"
 
 [[package]]
 name = "autocfg"
@@ -339,10 +339,10 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 [[package]]
 name = "eventd-client"
 version = "0.1.11"
-source = "git+https://github.com/peios/eventd.git?rev=90a4b05e9325a5c552d675f4c85fad281b38fc68#90a4b05e9325a5c552d675f4c85fad281b38fc68"
+source = "git+https://github.com/peios/eventd.git?rev=f74954f969626352915b3885848b6e21d3492c3f#f74954f969626352915b3885848b6e21d3492c3f"
 dependencies = [
  "libc",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e)",
+ "peios",
 ]
 
 [[package]]
@@ -466,14 +466,14 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 [[package]]
 name = "gxwi"
 version = "0.0.7"
-source = "git+https://github.com/peios/gxwi.git?rev=3178855691c3a93fe6ee6fc7e0d8a30a07964db9#3178855691c3a93fe6ee6fc7e0d8a30a07964db9"
+source = "git+https://github.com/peios/gxwi.git?rev=0cdbd97c86ca0e78138c6b320d88d5be8e2a6407#0cdbd97c86ca0e78138c6b320d88d5be8e2a6407"
 dependencies = [
  "axum",
  "gxwi-abi",
  "hyper",
  "hyper-util",
  "libc",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
+ "peios",
  "serde",
  "serde_json",
  "tokio",
@@ -483,15 +483,15 @@ dependencies = [
 [[package]]
 name = "gxwi-abi"
 version = "0.0.7"
-source = "git+https://github.com/peios/gxwi.git?rev=3178855691c3a93fe6ee6fc7e0d8a30a07964db9#3178855691c3a93fe6ee6fc7e0d8a30a07964db9"
+source = "git+https://github.com/peios/gxwi.git?rev=0cdbd97c86ca0e78138c6b320d88d5be8e2a6407#0cdbd97c86ca0e78138c6b320d88d5be8e2a6407"
 
 [[package]]
 name = "gxwi-sd-editor"
 version = "0.1.0"
-source = "git+https://github.com/peios/gxwi-essentials.git?rev=898ecfe2f80372113e1799b2e0a6beddd00e4c6e#898ecfe2f80372113e1799b2e0a6beddd00e4c6e"
+source = "git+https://github.com/peios/gxwi-essentials.git?rev=bde15e2817e2e096c4f3ba1c6f7ef37ea1a997e4#bde15e2817e2e096c4f3ba1c6f7ef37ea1a997e4"
 dependencies = [
  "base64",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e)",
+ "peios",
  "serde",
  "serde_json",
 ]
@@ -867,7 +867,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "peinit2"
 version = "0.0.12"
-source = "git+https://github.com/peios/peinit.git?rev=46edcacf644785e9cc5ad108402b6c6971993346#46edcacf644785e9cc5ad108402b6c6971993346"
+source = "git+https://github.com/peios/peinit.git?rev=8ff7155b87e1f8c03ce78baf64d8d7b5425fbe3a#8ff7155b87e1f8c03ce78baf64d8d7b5425fbe3a"
 dependencies = [
  "jiff",
  "libc",
@@ -877,14 +877,8 @@ dependencies = [
 
 [[package]]
 name = "peios"
-version = "0.4.0"
-source = "git+https://github.com/peios/peios-rs.git?rev=7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e#7c05d93e82ddeae7c9c16c4bb21cfe5e5416ca7e"
-replace = "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)"
-
-[[package]]
-name = "peios"
-version = "0.4.0"
-source = "git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c#b1290dbfa805d4ef151d3fc961a8d89d6c30c12c"
+version = "0.5.0"
+source = "git+https://github.com/peios/peios-rs.git?rev=623520bc0405fdd4526bab45f45882e7f19b1ab1#623520bc0405fdd4526bab45f45882e7f19b1ab1"
 dependencies = [
  "bitflags 2.13.2",
  "libc",
@@ -894,15 +888,15 @@ dependencies = [
 [[package]]
 name = "peios-auth"
 version = "0.0.24"
-source = "git+https://github.com/peios/authd.git?rev=c99538e9c93b901eaffec25a3a2ae92bb7086622#c99538e9c93b901eaffec25a3a2ae92bb7086622"
+source = "git+https://github.com/peios/authd.git?rev=327ce68648e1594331c88a457afb261f9000b4c3#327ce68648e1594331c88a457afb261f9000b4c3"
 dependencies = [
  "auth-abi",
 ]
 
 [[package]]
 name = "peios-sys"
-version = "0.3.0"
-source = "git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c#b1290dbfa805d4ef151d3fc961a8d89d6c30c12c"
+version = "0.4.0"
+source = "git+https://github.com/peios/peios-rs.git?rev=623520bc0405fdd4526bab45f45882e7f19b1ab1#623520bc0405fdd4526bab45f45882e7f19b1ab1"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1008,7 +1002,7 @@ dependencies = [
  "gxwi",
  "gxwi-sd-editor",
  "libc",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
+ "peios",
  "radius-accounting",
  "radius-authorization",
  "radius-management",
@@ -1072,7 +1066,7 @@ dependencies = [
  "libc",
  "md-5",
  "peinit2",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
+ "peios",
  "radius-accounting",
  "radius-authorization",
  "radius-core",
@@ -1121,7 +1115,7 @@ dependencies = [
  "hmac",
  "libc",
  "md-5",
- "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
+ "peios",
  "peios-auth",
  "radius-accounting",
  "radius-authorization",

@@ -11,6 +11,7 @@ native = ["radius-management/native", "dep:peios", "dep:libc"]
 window = ["native", "dep:gxwi", "dep:gxwi-sd-editor"]
 
 [dependencies]
+radius-authorization = { path = "../radius-authorization" }
 radius-management = { path = "../radius-management" }
 radius-accounting = { path = "../radius-accounting" }
 radius-policy = { path = "../radius-policy" }

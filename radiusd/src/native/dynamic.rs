@@ -2,7 +2,7 @@
 use super::authentication::{evaluate_record, policy_facts_record};
 use crate::{config::Config, driver::Reason};
 use peios::security::Sid;
-use peios_auth::{ClaimCoverage, Field, IdentityKind, Key, Record, fields};
+use peios_auth::{fields, ClaimCoverage, Field, IdentityKind, Key, Record};
 use radius_accounting::{
     dynamic::{Authorization, CredentialBinding},
     model::Session,
@@ -231,10 +231,21 @@ fn evaluate(config: &Config, session: &Session, record: &mut Record) -> Evaluati
             ),
             _ => None,
         };
+        let client = config
+            .clients
+            .get(&session.client)
+            .ok_or(Reason::MissingContext)?;
+        let attributes = assignment
+            .settings
+            .compile(assignment.vlan, &client.authorization)
+            .map_err(|_| Reason::Policy)?;
+        let timeout_seconds = assignment.settings.timer(network.reauthenticate_seconds).0;
         Ok(Evaluation::Granted {
             desired: Authorization {
                 vlan: assignment.vlan,
-                timeout_seconds: network.reauthenticate_seconds,
+                timeout_seconds,
+                attributes,
+                configured_timeout_seconds: Some(timeout_seconds),
             },
             credentials,
         })

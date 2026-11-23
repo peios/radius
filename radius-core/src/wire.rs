@@ -234,6 +234,45 @@ pub(crate) fn response_with_policy(
     class: Option<&[u8]>,
     vlan: Option<u16>,
 ) -> Result<Vec<u8>, Error> {
+    response_with_authorization(
+        request_id,
+        request_auth,
+        secret,
+        code,
+        eap,
+        state,
+        msk,
+        reauthenticate_seconds,
+        class,
+        vlan,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn response_with_authorization(
+    request_id: u8,
+    request_auth: &[u8; 16],
+    secret: &[u8],
+    code: u8,
+    eap: &[u8],
+    state: Option<[u8; 16]>,
+    msk: Option<&[u8]>,
+    reauthenticate_seconds: Option<u32>,
+    class: Option<&[u8]>,
+    vlan: Option<u16>,
+    authorization: Option<&radius_authorization::Compiled>,
+) -> Result<Vec<u8>, Error> {
+    if let Some(auth) = authorization {
+        auth.validate().map_err(|_| Error::Configuration)?;
+        if code != 2
+            || auth.attributes.iter().any(|a| {
+                matches!(a.kind, 27 | 29) || (vlan.is_some() && matches!(a.kind, 64 | 65 | 81))
+            })
+        {
+            return Err(Error::Configuration);
+        }
+    }
     let mut out = vec![code, request_id, 0, 0];
     out.extend_from_slice(request_auth);
     // First attribute: strict MA, including for Reject and Challenge.
@@ -266,7 +305,19 @@ pub(crate) fn response_with_policy(
             return Err(Error::Configuration);
         }
         attribute(&mut out, 27, &seconds.to_be_bytes())?;
-        attribute(&mut out, 29, &1u32.to_be_bytes())?;
+        let disconnect = authorization.is_some_and(|a| {
+            a.settings.0.contains_key("SessionTimeoutSeconds")
+                && a.settings
+                    .text("SessionExpiryAction")
+                    .unwrap_or("disconnect")
+                    == "disconnect"
+        });
+        attribute(&mut out, 29, &u32::from(!disconnect).to_be_bytes())?;
+    }
+    if let Some(authorization) = authorization {
+        for value in &authorization.attributes {
+            attribute(&mut out, value.kind, &value.value)?;
+        }
     }
     if let Some(msk) = msk {
         if code != 2 || msk.len() != 64 {

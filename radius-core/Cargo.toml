@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+radius-authorization = { path = "../radius-authorization" }
 rustls.workspace = true
 ring.workspace = true
 md-5.workspace = true

@@ -71,6 +71,7 @@ pub struct Client {
     pub addresses: Vec<Prefix>,
     pub secret: Zeroizing<Vec<u8>>,
     pub networks: Vec<String>,
+    pub authorization: radius_authorization::Mappings,
 }
 pub struct Network {
     pub authentication_profile: Option<String>,
@@ -167,6 +168,10 @@ impl Config {
         }
         let mut prefixes = BTreeSet::new();
         for (name, client) in &self.clients {
+            client
+                .authorization
+                .validate()
+                .map_err(|_| "invalid client authorization mapping")?;
             if name != &client.name
                 || client.addresses.is_empty()
                 || client.addresses.len() > 256

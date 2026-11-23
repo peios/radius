@@ -1010,6 +1010,7 @@ dependencies = [
  "libc",
  "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
  "radius-accounting",
+ "radius-authorization",
  "radius-management",
  "radius-policy",
  "serde_json",
@@ -1022,6 +1023,7 @@ version = "0.1.0"
 dependencies = [
  "hmac",
  "md-5",
+ "radius-authorization",
  "ring",
  "rusqlite",
  "serde",
@@ -1031,11 +1033,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "radius-authorization"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "radius-core"
 version = "0.1.0"
 dependencies = [
  "hmac",
  "md-5",
+ "radius-authorization",
  "rcgen",
  "ring",
  "rustls",
@@ -1063,6 +1074,7 @@ dependencies = [
  "peinit2",
  "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
  "radius-accounting",
+ "radius-authorization",
  "radius-core",
  "radius-policy",
  "ring",
@@ -1079,6 +1091,7 @@ name = "radius-policy"
 version = "0.1.0"
 dependencies = [
  "pnp-core",
+ "radius-authorization",
  "serde",
  "serde_json",
 ]
@@ -1111,6 +1124,7 @@ dependencies = [
  "peios 0.4.0 (git+https://github.com/peios/peios-rs.git?rev=b1290dbfa805d4ef151d3fc961a8d89d6c30c12c)",
  "peios-auth",
  "radius-accounting",
+ "radius-authorization",
  "radius-core",
  "radius-management",
  "radius-policy",

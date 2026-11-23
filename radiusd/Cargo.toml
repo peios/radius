@@ -10,6 +10,7 @@ default = []
 native = ["dep:peios", "dep:peios-auth", "dep:libc", "dep:socket2", "radius-management/native"]
 
 [dependencies]
+radius-authorization = { path = "../radius-authorization" }
 radius-core = { path = "../radius-core" }
 radius-policy = { path = "../radius-policy" }
 radius-management = { path = "../radius-management" }

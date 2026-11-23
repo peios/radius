@@ -231,6 +231,7 @@ pub fn config(tls: &Tls, clients: usize, limits: Limits) -> Config {
         name: "Synthetic".into(),
         enabled: true,
         vlan: None,
+        settings: Default::default(),
     };
     let rule = radius_policy::RuleInput {
         name: "default".into(),
@@ -258,6 +259,7 @@ pub fn config(tls: &Tls, clients: usize, limits: Limits) -> Config {
                         addresses: vec![Prefix::parse(&address(i, 0).ip().to_string()).unwrap()],
                         secret: Zeroizing::new(SECRET.to_vec()),
                         networks: vec!["synthetic-network".into()],
+                        authorization: Default::default(),
                     },
                 )
             })

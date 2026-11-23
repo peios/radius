@@ -153,14 +153,11 @@ pub(super) fn reconcile(
     state.configuration = snapshot.config.fingerprint.clone();
     state.checked_ms = now;
     state.observed = session.observed.clone();
-    state.requested = worker::wait(service.ledger.command_history(session.id.clone())?)?
-        .into_iter()
-        .find(|c| {
-            c.state == "acknowledged"
-                && c.action == Action::UpdateAuthorization
-                && c.proof == state.proof
-        })
-        .and_then(|c| c.desired);
+    state.requested = worker::wait(
+        service
+            .ledger
+            .acknowledged_authorization(session.id.clone(), state.proof.clone())?,
+    )?;
     let mut selected = None;
     let mut reason = String::new();
     let authoritative = !matches!(evaluation, Evaluation::Unavailable(_));
@@ -194,6 +191,7 @@ pub(super) fn reconcile(
             state.desired = Some(desired.clone());
             state.status = "current".into();
             if let Some(proof) = &session.proof {
+                let baseline = proof.baseline(state.requested.as_ref());
                 let changed = credentials
                     .as_ref()
                     .filter(|_| !proof.credentials.is_empty())
@@ -220,20 +218,12 @@ pub(super) fn reconcile(
                 {
                     state.status = "credential-status-unknown".into();
                 }
-                if desired.vlan != proof.issued.vlan && policy.vlan_disconnect {
+                if desired.vlan != baseline.vlan && policy.vlan_disconnect {
                     selected = Some(Action::Disconnect);
                     reason = format!("vlan-changed:{:?}", desired.vlan);
                 } else if selected.is_none()
                     && policy.update_authorization
-                    && (desired.vlan != proof.issued.vlan
-                        || snapshot
-                            .config
-                            .policies
-                            .get(session.policy.as_deref().unwrap_or_default())
-                            .is_some_and(|p| {
-                                p.reauthenticate_seconds != proof.configured_timeout_seconds
-                            }))
-                    && state.requested.as_ref() != Some(&desired)
+                    && !desired.same_policy(&baseline)
                 {
                     selected = Some(Action::UpdateAuthorization);
                     reason = "authorization-changed".into();
@@ -277,6 +267,13 @@ pub(super) fn reconcile(
                 vlan,
                 configured_timeout,
                 clear,
+                update.then_some((
+                    state
+                        .desired
+                        .as_ref()
+                        .map(|d| (d.vlan, &d.attributes, d.configured_timeout_seconds)),
+                    &profile.authorization,
+                )),
             ))?;
             radius_accounting::hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref())
         } else {

@@ -10,12 +10,14 @@ fn profiles() -> Vec<Profile> {
             name: "Staff".into(),
             enabled: true,
             vlan: Some(10),
+            settings: Default::default(),
         },
         Profile {
             id: B.into(),
             name: "Default".into(),
             enabled: true,
             vlan: None,
+            settings: Default::default(),
         },
     ]
 }

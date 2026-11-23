@@ -25,6 +25,13 @@ The native Cargo feature links the matching public `libauth.so.1` and
 headers from pinned canonical source revisions. A development guest
 must load these matching libraries rather than older image copies.
 
+Fresh state-directory provisioning requires a kernel with KACS control
+handles: native opens that request no data rights. The administrator creates
+each directory carrying its security descriptor. Older kernels reject this
+open with `EINVAL`; provisioning does not fall back to creating an unprotected
+directory and setting its descriptor afterward. Existing directories keep
+their descriptors.
+
 The current bindings require authd's PGSS version 6 protocol and libauth
 ABI 6. The shared-library filename remains `libauth.so.1`, so successful
 loader resolution alone does not establish compatibility; the bindings
@@ -146,9 +153,13 @@ unauthorized status endpoint. See
 The loader copies Registry configuration through one short read-only
 transaction, including key resolution, enumeration, values, and layer
 selection.
-It releases the snapshot before opening credential files. Capture races and
-other read errors discard the complete candidate; the worker retries on its
-normal reload cycle and keeps admission paused while configuration is invalid.
+It releases the snapshot before opening credential files. Capture races
+discard the complete candidate and retry a fresh read within a 250 ms
+retry budget. That budget limits additional attempts; it does not interrupt a
+Registry call already in progress. Other read errors return immediately.
+If capture still fails, the worker retries on its normal reload cycle and
+keeps admission paused while configuration is invalid. Writes are not retried
+by this read helper.
 Watches and fingerprints detect changes but do not establish read consistency.
 Prepare protected immutable credential files, then transactionally switch
 references. Keep old files until safely unused; a Registry transaction does

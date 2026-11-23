@@ -170,6 +170,7 @@ fn setup_peers() -> (Setup, ClientConnection) {
                 addresses: vec![Prefix::parse("127.0.0.0/8").unwrap()],
                 secret: Zeroizing::new(SECRET.to_vec()),
                 networks: vec!["home".into()],
+                authorization: Default::default(),
             },
         )]),
         networks: BTreeMap::from([(
@@ -674,6 +675,7 @@ fn most_specific_client_wins_and_bad_secret_has_no_fallback() {
             addresses: vec![Prefix::parse("127.0.0.1").unwrap()],
             secret: Zeroizing::new(b"other-secret-at-least-16".to_vec()),
             networks: vec!["home".into()],
+            authorization: Default::default(),
         },
     );
     assert_eq!(config.client(peer().ip()).unwrap().name, "one");
@@ -699,6 +701,7 @@ fn conflicting_client_prefix_or_network_ssid_is_rejected() {
             addresses: vec![Prefix::parse("127.0.0.0/8").unwrap()],
             secret: Zeroizing::new(SECRET.to_vec()),
             networks: vec!["home".into()],
+            authorization: Default::default(),
         },
     );
     assert!(config.validate().is_err());
@@ -737,6 +740,7 @@ fn disabled_specific_client_cannot_fall_back_to_an_enabled_prefix() {
             addresses: vec![Prefix::parse("127.0.0.1").unwrap()],
             secret: Zeroizing::new(Vec::new()),
             networks: vec!["home".into()],
+            authorization: Default::default(),
         },
     );
     let mut d = Driver::new(Arc::new(config), backend).unwrap();
@@ -842,6 +846,7 @@ fn access_policy() -> std::sync::Arc<radius_policy::Policy> {
         name: "Default".into(),
         enabled: true,
         vlan: None,
+        settings: Default::default(),
     };
     let rule = radius_policy::RuleInput {
         name: "default".into(),
@@ -862,6 +867,7 @@ fn vlan_assignment_survives_signed_reply_retransmission_without_extra_accounting
         name: "Staff".into(),
         enabled: true,
         vlan: Some(20),
+        settings: Default::default(),
     };
     let rule = radius_policy::RuleInput {
         name: "default".into(),
@@ -910,12 +916,14 @@ fn profile_conflict_refuses_before_accounting_reservation() {
             name: "A".into(),
             enabled: true,
             vlan: Some(10),
+            settings: Default::default(),
         },
         radius_policy::Profile {
             id: "22222222-2222-4222-8222-222222222222".into(),
             name: "B".into(),
             enabled: true,
             vlan: Some(20),
+            settings: Default::default(),
         },
     ];
     let rules = profiles
@@ -948,5 +956,63 @@ fn profile_conflict_refuses_before_accounting_reservation() {
     while pos < reply.len() {
         assert!(!matches!(reply[pos], 25 | 26 | 64 | 65 | 81));
         pos += reply[pos + 1] as usize;
+    }
+}
+
+#[test]
+fn complete_profile_is_cached_and_missing_equipment_mapping_refuses_before_accounting() {
+    for supported in [true, false] {
+        let (mut config, tls, mut backend, _, _, _) = setup();
+        let profile=radius_policy::Profile{
+            id:"11111111-1111-4111-8111-111111111111".into(),name:"Guest".into(),enabled:true,vlan:Some(20),
+            settings:serde_json::from_value(serde_json::json!({"DownloadBitsPerSecond":10_000_000,"IdleTimeoutSeconds":120,"FilterIds":["guest"],"SessionTimeoutSeconds":60})).unwrap(),
+        };
+        let rule = radius_policy::RuleInput {
+            name: "default".into(),
+            values: BTreeMap::from([(
+                "Actions".into(),
+                serde_json::json!([format!("ASSIGN({})", profile.id)]),
+            )]),
+            children: vec![],
+        };
+        config.networks.get_mut("home").unwrap().access =
+            Arc::new(radius_policy::Policy::compile(&[rule], &[profile]).unwrap());
+        if supported {
+            config.clients.get_mut("aps").unwrap().authorization=serde_json::from_value(serde_json::json!({"settings":{"DownloadBitsPerSecond":[{"target":{"vendor":14122,"attribute":8},"format":"integer32"}]}})).unwrap();
+        }
+        let calls = Rc::new(Cell::new(0));
+        backend.accounting = Some((Rc::new(Cell::new(true)), calls.clone(), None));
+        let mut driver = Driver::new(Arc::new(config), backend).unwrap();
+        let mut out = Out {
+            deliver: true,
+            ..Default::default()
+        };
+        let now = Instant::now();
+        let last = pending(&mut driver, tls, &mut out, now);
+        driver.tick(now, &mut out);
+        let reply = out.replies.pop_front().unwrap();
+        assert_eq!(reply[0], if supported { 2 } else { 3 });
+        assert_eq!(calls.get(), usize::from(supported));
+        let mut attributes = Vec::new();
+        let mut at = 20;
+        while at < reply.len() {
+            let length = reply[at + 1] as usize;
+            attributes.push((reply[at], reply[at + 2..at + length].to_vec()));
+            at += length;
+        }
+        if supported {
+            assert!(attributes.contains(&(27, 60u32.to_be_bytes().to_vec())));
+            assert!(attributes.contains(&(29, 0u32.to_be_bytes().to_vec())));
+            assert!(attributes.contains(&(28, 120u32.to_be_bytes().to_vec())));
+            assert!(attributes.contains(&(11, b"guest".to_vec())));
+            assert!(attributes.contains(&(26, vec![0, 0, 55, 42, 8, 6, 0, 152, 150, 128])));
+        } else {
+            assert!(!attributes
+                .iter()
+                .any(|(kind, _)| matches!(kind, 11 | 25..=29 | 64 | 65 | 81)));
+        }
+        driver.receive(now, 0, peer(), &last, &mut out);
+        assert_eq!(out.replies.pop_front().unwrap(), reply);
+        assert_eq!(calls.get(), usize::from(supported));
     }
 }

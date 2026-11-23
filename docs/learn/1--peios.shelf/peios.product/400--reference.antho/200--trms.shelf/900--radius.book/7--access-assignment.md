@@ -13,7 +13,10 @@ Authd supplies identity and permitted claims; it does not interpret VLANs.
 
 ## Profiles and defaults
 
-An access profile contains `Name`, `Enabled`, and an optional `VlanId` DWORD.
+An access profile contains `Name`, `Enabled`, and optional typed network
+settings described in [Access Profile Settings](~peios/reference/radius/access-profile-settings).
+These include timers, rates, filters, addressing, tunnels, and equipment
+extensions. The optional `VlanId` is a DWORD.
 VLAN IDs range from 1 through 4094. An absent `VlanId` produces no VLAN
 override. Zero is invalid. Disabling a selected profile refuses admission.
 
@@ -169,6 +172,11 @@ The result identifies saved configuration and its fingerprint. It does not
 claim that the daemon activated that configuration. Simulation does not verify
 credentials, run Connect checks, reserve allowances, grant access, or contact
 an AP.
+
+Supplying a single `Client.Id` fact compiles the selected settings with that
+client's saved equipment mapping. The returned authorization plan separates
+encoded settings from missing mappings and missing client context. Successful
+encoding does not establish that a device supports or enforces the attributes.
 
 ## Bounds and development migration
 

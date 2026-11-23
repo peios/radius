@@ -105,6 +105,8 @@ fn fixture(port: u16) -> Fixture {
             issued: Authorization {
                 vlan: Some(10),
                 timeout_seconds: 3600,
+                attributes: Default::default(),
+                configured_timeout_seconds: None,
             },
             configured_timeout_seconds: 3600,
             credentials: vec![CredentialBinding {
@@ -172,6 +174,8 @@ fn granted(vlan: u16, revision: u8) -> Evaluation {
         desired: Authorization {
             vlan: Some(vlan),
             timeout_seconds: 3600,
+            attributes: Default::default(),
+            configured_timeout_seconds: None,
         },
         credentials: Some(vec![CredentialBinding {
             reference: [1; 16],
@@ -187,6 +191,73 @@ fn commands(f: &Fixture) -> Vec<radius_accounting::store::Command> {
             .unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn richer_policy_updates_are_not_reissued_as_allowance_time_decreases() {
+    let f = fixture(9);
+    let mut snapshot = (*f.service.snapshot().unwrap()).clone();
+    snapshot
+        .config
+        .dynamic
+        .policies
+        .get_mut(POLICY)
+        .unwrap()
+        .update_authorization = true;
+    let settings: radius_authorization::Settings =
+        serde_json::from_value(serde_json::json!({"IdleTimeoutSeconds":120})).unwrap();
+    let attributes = settings.compile(Some(10), &Default::default()).unwrap();
+    let desired = Authorization {
+        vlan: Some(10),
+        timeout_seconds: 300,
+        configured_timeout_seconds: Some(3600),
+        attributes,
+    };
+    let evaluate = |desired| Evaluation::Granted {
+        desired,
+        credentials: Some(vec![CredentialBinding {
+            reference: [1; 16],
+            revision: [2; 16],
+        }]),
+    };
+    reconcile(&f.service, &snapshot, &f.session, evaluate(desired.clone())).unwrap();
+    let mut command = commands(&f).remove(0);
+    assert_eq!(command.action, Action::UpdateAuthorization);
+    command.state = "acknowledged".into();
+    worker::wait(f.service.ledger.command_result(command.clone()).unwrap()).unwrap();
+    reconcile(&f.service, &snapshot, &f.session, evaluate(desired.clone())).unwrap();
+    let before = worker::wait(
+        f.service
+            .ledger
+            .reconciliation(f.session.id.clone())
+            .unwrap(),
+    )
+    .unwrap();
+    let mut lower = desired;
+    lower.timeout_seconds = 200;
+    reconcile(&f.service, &snapshot, &f.session, evaluate(lower)).unwrap();
+    let after = worker::wait(
+        f.service
+            .ledger
+            .reconciliation(f.session.id.clone())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(commands(&f).len(), 1);
+    assert_eq!(commands(&f)[0].id, command.id);
+    assert_eq!(after.intent_epoch, before.intent_epoch);
+    // Returning to the originally issued profile still needs an update: the
+    // last acknowledged authorization is the actual comparison baseline.
+    reconcile(&f.service, &snapshot, &f.session, granted(10, 2)).unwrap();
+    assert_eq!(commands(&f).len(), 2);
+    assert!(commands(&f)[0]
+        .desired
+        .as_ref()
+        .unwrap()
+        .attributes
+        .settings
+        .0
+        .is_empty());
 }
 #[test]
 fn unchanged_effective_policy_and_nt_maintenance_do_not_control_sessions() {
@@ -330,6 +401,8 @@ fn missing_credential_metadata_is_unknown_and_cannot_rebind_a_proved_revision() 
             desired: Authorization {
                 vlan: Some(10),
                 timeout_seconds: 3600,
+                attributes: Default::default(),
+                configured_timeout_seconds: None,
             },
             credentials: None,
         },
@@ -466,6 +539,100 @@ fn generic_profile_does_not_claim_fresh_authentication_or_silently_disconnect() 
     }
     assert_eq!(commands(&f)[0].action, Action::Reauthenticate);
     assert_eq!(commands(&f)[0].attempts, 0);
+}
+
+#[test]
+fn rich_coa_transmits_the_exact_vendor_setting_and_retains_its_acknowledged_baseline() {
+    let nas = UdpSocket::bind("127.0.0.1:0").unwrap();
+    nas.set_nonblocking(true).unwrap();
+    let mut f = fixture(nas.local_addr().unwrap().port());
+    let mut snapshot = (*f.service.snapshot().unwrap()).clone();
+    let mut profile = radius_accounting::dynamic::Profile::wispr_rates();
+    profile
+        .authorization
+        .live
+        .insert("DownloadBitsPerSecond".into());
+    let settings: radius_authorization::Settings =
+        serde_json::from_value(serde_json::json!({"DownloadBitsPerSecond":1000})).unwrap();
+    let desired = Authorization {
+        vlan: Some(10),
+        timeout_seconds: 3600,
+        configured_timeout_seconds: Some(3600),
+        attributes: settings.compile(Some(10), &profile.authorization).unwrap(),
+    };
+    snapshot
+        .config
+        .dynamic
+        .profiles
+        .insert("fixture".into(), profile);
+    snapshot
+        .config
+        .dynamic
+        .clients
+        .insert(CLIENT.into(), Some("fixture".into()));
+    f.service = Service::fixture(snapshot, f.service.ledger.clone());
+    let expected = desired.clone();
+    f.service.publish_authority(Some(Authority {
+        revision: f.service.snapshot().unwrap().config.fingerprint.clone(),
+        evaluate: Arc::new(move |sessions| {
+            sessions
+                .iter()
+                .map(|_| Evaluation::Granted {
+                    desired: expected.clone(),
+                    credentials: None,
+                })
+                .collect()
+        }),
+    }));
+    worker::wait(
+        f.service
+            .ledger
+            .dynamic(Intent {
+                intent_key: String::new(),
+                request_id: None,
+                session: f.session.id.clone(),
+                actor: SID.into(),
+                reason: "manual".into(),
+                action: Action::UpdateAuthorization,
+                configuration: f.service.snapshot().unwrap().config.fingerprint.clone(),
+                desired: Some(desired.clone()),
+                fallback: vec![],
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").unwrap());
+    let mut dispatcher = Commands::new();
+    let packet = tick_until_packet(&mut dispatcher, &f, &socket, &nas);
+    assert_eq!(packet[0], 43);
+    let mut at = 20;
+    let mut attrs = Vec::new();
+    while at < packet.len() {
+        let length = usize::from(packet[at + 1]);
+        attrs.push((packet[at], packet[at + 2..at + length].to_vec()));
+        at += length;
+    }
+    assert!(attrs.contains(&(44, f.session.session.clone())));
+    assert!(attrs.contains(&(26, vec![0, 0, 55, 42, 8, 6, 0, 0, 3, 232])));
+    assert!(attrs.contains(&(27, 3600u32.to_be_bytes().to_vec())));
+    // Independent response construction authenticates the actual transmitted
+    // request; no AP or untrusted external service participates in this test.
+    let mut ack = vec![44, packet[1], 0, 20];
+    ack.extend_from_slice(&packet[4..20]);
+    use md5::{Digest, Md5};
+    let mut hash = Md5::new();
+    hash.update(&ack);
+    hash.update(SECRET);
+    ack[4..20].copy_from_slice(&hash.finalize());
+    assert!(dispatcher.response(&socket, nas.local_addr().unwrap(), &ack, &f.service, false));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while commands(&f)[0].state != "acknowledged" {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let recorded = commands(&f).remove(0);
+    assert_eq!(recorded.desired, Some(desired));
+    assert!(recorded.previous.unwrap().attributes.settings.0.is_empty());
 }
 
 #[test]

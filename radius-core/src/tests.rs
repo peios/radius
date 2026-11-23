@@ -15,6 +15,74 @@ use std::{
 const SECRET: &[u8] = b"test-radius-secret-at-least-16";
 
 #[test]
+fn complete_authorization_is_signed_and_only_available_on_accept() {
+    use md5::Digest;
+    let settings: radius_authorization::Settings = serde_settings();
+    let compiled = settings.compile(None, &Default::default()).unwrap();
+    let request_auth = [42; 16];
+    let reply = crate::wire::response_with_authorization(
+        7,
+        &request_auth,
+        SECRET,
+        2,
+        &[3, 1, 0, 4],
+        None,
+        None,
+        Some(60),
+        None,
+        None,
+        Some(&compiled),
+    )
+    .unwrap();
+    let mut attrs = Vec::new();
+    let mut at = 20;
+    while at < reply.len() {
+        let length = reply[at + 1] as usize;
+        attrs.push((reply[at], reply[at + 2..at + length].to_vec()));
+        at += length;
+    }
+    assert!(attrs.contains(&(28, 120u32.to_be_bytes().to_vec())));
+    assert!(attrs.contains(&(11, b"guest".to_vec())));
+    assert!(attrs.contains(&(29, 0u32.to_be_bytes().to_vec())));
+    let mut signed = reply.clone();
+    signed[4..20].copy_from_slice(&request_auth);
+    let ma = signed[22..38].to_vec();
+    signed[22..38].fill(0);
+    let mut mac = Hmac::<Md5>::new_from_slice(SECRET).unwrap();
+    mac.update(&signed);
+    assert_eq!(ma, mac.finalize().into_bytes().as_slice());
+    signed[22..38].copy_from_slice(&ma);
+    let mut digest = Md5::new();
+    Digest::update(&mut digest, &signed);
+    Digest::update(&mut digest, SECRET);
+    assert_eq!(&reply[4..20], digest.finalize().as_slice());
+    for code in [3, 11] {
+        assert!(crate::wire::response_with_authorization(
+            7,
+            &request_auth,
+            SECRET,
+            code,
+            &[4, 1, 0, 4],
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&compiled)
+        )
+        .is_err());
+    }
+    fn serde_settings() -> radius_authorization::Settings {
+        use radius_authorization::{Settings, Value};
+        Settings(std::collections::BTreeMap::from([
+            ("IdleTimeoutSeconds".into(), Value::Number(120)),
+            ("FilterIds".into(), Value::List(vec!["guest".into()])),
+            ("SessionTimeoutSeconds".into(), Value::Number(60)),
+        ]))
+    }
+}
+
+#[test]
 fn vlan_assignment_is_atomic_tagged_consistently_and_integrity_protected() {
     use md5::Digest;
     let request_auth = [42; 16];

@@ -47,6 +47,8 @@ usage: radius [--json] [command]
   accounting rebuild --confirm   rebuild retained evidence without sending actions
   client|policy|profile|identity|quota|accounting-profile|dynamic-profile|access-profile|rule list
   KIND show NAME-OR-GUID
+  access-profile fields          list typed profile settings and standard attributes
+  dynamic-profile template wispr print an RFC 5176 profile with WISPr rate mappings
   KIND create NAME [--set FIELD=VALUE] ...
   KIND set NAME-OR-GUID [--set FIELD=VALUE] ...
   KIND unset NAME-OR-GUID FIELD ...  remove optional settings or rule conditions
@@ -272,20 +274,17 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
                     action: radius_accounting::dynamic::Action::UpdateAuthorization,
                 },
                 ["reconciliation", id] => R::Reconciliation { id: id.into() },
-                [
-                    action @ ("disconnect" | "reauthenticate" | "update"),
-                    id,
-                    "--request-id",
-                    request_id,
-                ] => R::Control {
-                    request_id: request_id.into(),
-                    id: id.into(),
-                    action: match action {
-                        "disconnect" => radius_accounting::dynamic::Action::Disconnect,
-                        "reauthenticate" => radius_accounting::dynamic::Action::Reauthenticate,
-                        _ => radius_accounting::dynamic::Action::UpdateAuthorization,
-                    },
-                },
+                [action @ ("disconnect" | "reauthenticate" | "update"), id, "--request-id", request_id] => {
+                    R::Control {
+                        request_id: request_id.into(),
+                        id: id.into(),
+                        action: match action {
+                            "disconnect" => radius_accounting::dynamic::Action::Disconnect,
+                            "reauthenticate" => radius_accounting::dynamic::Action::Reauthenticate,
+                            _ => radius_accounting::dynamic::Action::UpdateAuthorization,
+                        },
+                    }
+                }
                 ["annotate", id, note] => R::Annotate {
                     id: id.into(),
                     note: note.into(),
@@ -387,18 +386,20 @@ pub fn run(args: &[String]) -> io::Result<serde_json::Value> {
                 _ => Err(usage("expected secret show, generate, or set")),
             }
         }
+        ["access-profile", "fields"] => Ok(json!(radius_authorization::FIELDS)),
+        ["dynamic-profile", "template", "wispr"] => {
+            Ok(json!(radius_accounting::dynamic::Profile::wispr_rates()))
+        }
         [kind, action, rest @ ..] => {
             let kind =
                 Kind::parse(kind).ok_or_else(|| usage("unknown object kind; run radius --help"))?;
             let stored = registry::read()?;
             match (*action, rest) {
-                ("list", []) => Ok(json!(
-                    stored
-                        .objects
-                        .iter()
-                        .filter(|r| r.kind == kind)
-                        .collect::<Vec<_>>()
-                )),
+                ("list", []) => Ok(json!(stored
+                    .objects
+                    .iter()
+                    .filter(|r| r.kind == kind)
+                    .collect::<Vec<_>>())),
                 ("create", [name, args @ ..]) => {
                     let record = operations::create(
                         kind,

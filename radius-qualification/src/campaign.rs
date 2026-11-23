@@ -432,6 +432,8 @@ pub fn control_sequences(data: &[u8]) {
                     desired: Some(Authorization {
                         vlan: Some(1 + u16::from(bytes.get(4).copied().unwrap_or(0))),
                         timeout_seconds: 60,
+                        attributes: Default::default(),
+                        configured_timeout_seconds: None,
                     }),
                     fallback: if action != Action::Disconnect {
                         vec![Action::Disconnect]

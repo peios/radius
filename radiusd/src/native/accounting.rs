@@ -5,11 +5,11 @@ use crate::{
     driver::{AdmissionContext, AdmissionExtras, Backend, Progress, Reason},
 };
 use peios::security::SidRef;
-use peios_auth::{Authenticated, Field, fields};
+use peios_auth::{fields, Authenticated, Field};
 use radius_accounting::{
     model::Grant,
     quota::{Balance, Dimension},
-    worker::{Completion, now_ms},
+    worker::{now_ms, Completion},
 };
 use radius_core::Verification;
 use radius_management::native::accounting::Service;
@@ -157,10 +157,12 @@ impl Backend for AccountingAuth {
                                 grant: class.clone(),
                                 authenticated_ms: now,
                                 configuration: c.saved_fingerprint.into(),
-                                configured_timeout_seconds: c.network.reauthenticate_seconds,
+                                configured_timeout_seconds: c.configured_timeout_seconds,
                                 issued: radius_accounting::dynamic::Authorization {
                                     vlan: c.vlan,
-                                    timeout_seconds: c.network.reauthenticate_seconds,
+                                    timeout_seconds: c.configured_timeout_seconds,
+                                    attributes: c.authorization.clone(),
+                                    configured_timeout_seconds: Some(c.configured_timeout_seconds),
                                 },
                                 credentials: match s
                                     .identity
@@ -221,8 +223,8 @@ impl Backend for AccountingAuth {
                     .map(|b| (b.remaining / 1000).max(1).min(u32::MAX as u64) as u32)
                     .min();
                 pending.proof.issued.timeout_seconds = timeout
-                    .map_or(c.network.reauthenticate_seconds, |t| {
-                        t.min(c.network.reauthenticate_seconds)
+                    .map_or(c.configured_timeout_seconds, |t| {
+                        t.min(c.configured_timeout_seconds)
                     });
                 pending.timeout = timeout;
                 pending.bound = Some(

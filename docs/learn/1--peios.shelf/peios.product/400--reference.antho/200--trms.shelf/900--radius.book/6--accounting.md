@@ -42,6 +42,11 @@ ledger. A separate file lock prevents two owners. Stop radiusd before copying
 the database, WAL, and shared-memory files as a consistent backup set.
 Rebuild reinterprets retained evidence; it cannot recover deleted evidence.
 
+Ledger format 4 retains complete issued and requested access settings and
+their exact equipment encodings. Formats 1–3 upgrade in place. Existing
+evidence and unknown legacy fields are preserved. Earlier binaries refuse
+format 4; keep a stopped full-state backup and prior runtime for rollback.
+
 ## Session interpretation
 
 Start, Interim-Update, and Stop form ordinary sessions. Accounting-On and
@@ -158,8 +163,16 @@ attempts.
 
 ## Administration and diagnostics
 
+The accounting status query reads `AccountingSecurity` before checking the
+caller's token. A failed Registry read makes the query unavailable; it does
+not substitute the default descriptor for an unreadable configuration. The
+default applies only when a successful read finds no explicit setting.
+
 Run `radius accounting init` as an administrator to provision the private
-directory. Existing directories and ledger files must already have trusted
+directory. Creation supplies its private descriptor atomically and requires
+the KACS control-handle support described in
+[Native Integration](~peios/reference/radius/native-integration).
+Existing directories and ledger files must already have trusted
 owners and private descriptors. SQLite also needs ReadAttributes on its path
 prefixes. On a restrictive `/var/state`, grant the service only mask `0x80`
 without inheritance; do not grant directory listing or broad data access.

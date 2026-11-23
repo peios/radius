@@ -23,6 +23,10 @@ def test policy(tests: List<rust.RustTest> = rust.tests(crates(), "radius-policy
     let each = for test in tests { = rust.run_test(test) }
 }
 
+def test authorization(tests: List<rust.RustTest> = rust.tests(crates(), "radius-authorization")) {
+    let each = for test in tests { = rust.run_test(test) }
+}
+
 def test qualification(tests: List<rust.RustTest> = rust.tests(crates(), "radius-qualification")) {
     let each = for test in tests { = rust.run_test(test) }
 }
@@ -57,7 +61,7 @@ def test native(
     }
 }
 
-def test clippy(checked: List<List<{}>> = for each in ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius", "radius-accounting", "radius-policy", "radius-qualification"] {
+def test clippy(checked: List<List<{}>> = for each in ["radius-core", "radius-fixture", "radiusd", "radius-management", "radius", "radius-accounting", "radius-policy", "radius-qualification", "radius-authorization"] {
     = rust.clippy(crates(), each, flags = ["-Dwarnings"])
 }) {}
 

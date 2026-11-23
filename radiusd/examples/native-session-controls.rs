@@ -1,5 +1,5 @@
 //! Disposable guest qualification only; never run against a deployed machine.
-use peios_auth::{Field, IdentityKind, Key, fields};
+use peios_auth::{fields, Field, IdentityKind, Key};
 use radius_accounting::{
     dynamic::{Action, Authorization, CredentialBinding, Proof},
     model::Grant,
@@ -124,6 +124,8 @@ fn seed() {
             issued: Authorization {
                 vlan: Some(20),
                 timeout_seconds: 3600,
+                attributes: Default::default(),
+                configured_timeout_seconds: None,
             },
             configured_timeout_seconds: 3600,
             credentials,
@@ -230,13 +232,11 @@ fn acknowledge(nas: &UdpSocket, command: &serde_json::Value, code: u8) {
     std::thread::sleep(Duration::from_millis(50));
     let id = session_id();
     let rows = accounting::query(Request::Commands { id: id.clone() }).unwrap();
-    assert!(
-        !rows
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c["id"] == command["id"] && c["state"] == "acknowledged")
-    );
+    assert!(!rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["id"] == command["id"] && c["state"] == "acknowledged"));
     nas.send_to(&reply, peer).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -339,14 +339,12 @@ fn scoped(fallback: bool) {
             .unwrap();
         let _scope = token.impersonate_scoped().unwrap();
         for action in [Action::Reauthenticate, Action::UpdateAuthorization] {
-            assert!(
-                accounting::query(Request::Control {
-                    id: id.clone(),
-                    action,
-                    request_id: format!("denied-{fallback}-{action:?}")
-                })
-                .is_err()
-            );
+            assert!(accounting::query(Request::Control {
+                id: id.clone(),
+                action,
+                request_id: format!("denied-{fallback}-{action:?}")
+            })
+            .is_err());
         }
         let client = peios_auth::Client::new().unwrap();
         if let Ok(mut op) = client.lookup(

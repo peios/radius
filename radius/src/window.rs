@@ -1,6 +1,6 @@
 //! GXWI forms over the same local management operations as the CLI.
 use gxwi::settings::{self, Glyph, Kind as Button, Nav, Section, Tile, Width};
-use gxwi::{App, Facts, Fields, Live, Surface, Value as EventValue, escape};
+use gxwi::{escape, App, Facts, Fields, Live, Surface, Value as EventValue};
 use radius_management::{
     model::{Field, Kind, Record, Stored, Value, Values},
     native::{configuration, credentials, operations, registry, service},
@@ -348,6 +348,22 @@ impl Window {
                 true,
             ));
             rows.push_str(&settings::row("Scope","Hypothetical assignment only. Credentials, Connect permissions and accounting allowances were not checked.",""));
+            if let Some(values) = e["assignment"]["settings"].as_object() {
+                for (name, value) in values {
+                    let title = radius_authorization::spec(name)
+                        .map_or_else(|| label(name), |spec| spec.label);
+                    rows.push_str(&settings::row(title,"Selected profile setting; equipment enforcement is not checked by Explain.",&escape(&value.to_string())));
+                }
+            }
+            if let Some(state) = result["authorization_plan"]["state"].as_str() {
+                rows.push_str(&settings::row(
+                    "Equipment Encoding",
+                    result["authorization_plan"]["error"].as_str().unwrap_or(
+                        "A hypothetical encoding check does not establish equipment enforcement.",
+                    ),
+                    &escape(state),
+                ));
+            }
             if let Some(candidates) = e["candidates"].as_array() {
                 for c in candidates {
                     let rule = c["rule"].as_str().unwrap_or_default();
@@ -595,7 +611,7 @@ fn label(field: &str) -> &str {
         "VlanId" => "VLAN ID (blank for no override)",
         "Parent" => "Parent Rule (blank for a root rule)",
         "Priority" => "Priority (blank to inherit)",
-        _ => field,
+        _ => radius_authorization::spec(field).map_or(field, |s| s.label),
     }
 }
 fn reference(field: &str) -> Option<Kind> {
@@ -606,6 +622,63 @@ fn reference(field: &str) -> Option<Kind> {
         "DynamicAuthorizationProfile" => Some(Kind::DynamicProfile),
         _ => None,
     }
+}
+
+fn authorization_form(enabled: bool) -> String {
+    use radius_authorization::Kind;
+    let mut output = String::new();
+    let mut group = "";
+    let mut rows = String::new();
+    for spec in radius_authorization::FIELDS {
+        if group != spec.group {
+            if !rows.is_empty() {
+                output.push_str(&settings::group(group, &rows, ""));
+                rows.clear();
+            }
+            group = spec.group;
+        }
+        let control = if spec.name == "SessionExpiryAction" {
+            settings::select(
+                spec.name,
+                spec.label,
+                &[
+                    ("".into(), "Disconnect (default for session timeout)".into()),
+                    ("disconnect".into(), "Disconnect".into()),
+                    ("reauthenticate".into(), "Reauthenticate".into()),
+                ],
+                enabled,
+            )
+        } else if spec.kind == Kind::Boolean {
+            settings::select(
+                spec.name,
+                spec.label,
+                &[
+                    ("".into(), "Use equipment default".into()),
+                    ("1".into(), "Enabled".into()),
+                    ("0".into(), "Disabled".into()),
+                ],
+                enabled,
+            )
+        } else if spec.kind == Kind::List {
+            list(spec.name, spec.label, enabled)
+        } else {
+            text(spec.name, spec.label, "text", enabled)
+        };
+        let about=match spec.name {
+            "DownloadBitsPerSecond"|"UploadBitsPerSecond"=>"Per connection, from the connected device's perspective. Blank applies no RADIUS override.",
+            "SessionTimeoutSeconds"=>"Time until the selected expiry action. Network and principal limits may shorten it. Choose this or a reauthentication interval.",
+            "ReauthenticateSeconds"=>"A profile may shorten the network's reauthentication interval. Leave blank to use the network setting.",
+            "FilterIds"=>"Names of filters already installed on the equipment, one per line.",
+            "FilterRules"=>"NAS-Filter-Rule syntax, one complete supported rule per line.",
+            "Ipv4Pool"|"Ipv6Pool"|"DelegatedIpv6Pool"=>"A pool name understood by the gateway; RADIUS does not allocate leases.",
+            _=>"Optional. Equipment must support the standard attribute or have an explicit mapping. Blank applies no override.",
+        };
+        rows.push_str(&settings::row(spec.label, about, &control));
+    }
+    if !rows.is_empty() {
+        output.push_str(&settings::group(group, &rows, ""));
+    }
+    output
 }
 fn affected(stored: &Stored, record: &Record) -> String {
     let uses = stored.dependents(record.kind, &record.id);
@@ -761,6 +834,9 @@ impl Window {
             rows.push_str(&settings::row("Enabled","Disabled objects deny affected authentication. Established sessions follow the configured automatic session controls.",&settings::select("Enabled","Enabled",&[("1".into(),"Enabled".into()),("0".into(),"Disabled".into())],may)));
         }
         for (field, ty) in record.kind.fields() {
+            if record.kind == Kind::AccessProfile && radius_authorization::spec(field).is_some() {
+                continue;
+            }
             if *field == "SessionControl" {
                 rows.push_str(&session_control::policy_form(may));
                 continue;
@@ -875,7 +951,7 @@ impl Window {
                     ],
                     may,
                 )
-            } else if *field == "Definition" || *ty == Field::List {
+            } else if matches!(*field, "Definition" | "Extensions") || *ty == Field::List {
                 list(field, label(field), may)
             } else {
                 text(field, label(field), "text", may)
@@ -964,6 +1040,9 @@ impl Window {
         if record.kind == Kind::Client {
             rows.push_str(&settings::row("Shared Secret",if self.creating{"Leave blank to generate a secret. Reveal it after saving to configure the RADIUS client."}else{"Leave blank to keep the current secret. Replacement requires updating the corresponding RADIUS client."},&text("shared-secret","Shared Secret","password",may)));
         }
+        if record.kind == Kind::DynamicProfile && self.creating {
+            rows.push_str(&settings::row("WISPr Rate Mapping","Load the published upload/download attribute mappings into this draft. This does not establish equipment enforcement or enable live rate updates.",&settings::button("Use WISPr Template","equipment-wispr-template",&[],Button::Plain,may)));
+        }
         let mut controls = settings::submit(
             if self.creating { "Create" } else { "Save" },
             Button::Primary,
@@ -977,8 +1056,13 @@ impl Window {
             !self.busy,
         ));
         let mut page = format!(
-            r#"<form class="radius-record" fx-submit="save">{}{}</form>"#,
+            r#"<form class="radius-record" fx-submit="save">{}{}{}</form>"#,
             settings::group("Configuration", &rows, ""),
+            if record.kind == Kind::AccessProfile {
+                authorization_form(may)
+            } else {
+                String::new()
+            },
             settings::actions(&controls)
         );
         let mut permissions = String::new();
@@ -1844,6 +1928,11 @@ impl Live for Window {
                     }
                 }
             }
+            "equipment-wispr-template"=>{
+                if self.creating && self.edit.as_ref().is_some_and(|r|r.kind==Kind::DynamicProfile) {
+                    fields.set("Definition",&serde_json::to_string_pretty(&radius_accounting::dynamic::Profile::wispr_rates()).expect("equipment template serializes"));
+                }
+            },
             "close" => {
                 self.edit = None;
                 self.pending = None;
@@ -1925,6 +2014,7 @@ impl Live for Window {
                     }
                     if record.kind==Kind::Rule && (matches!(*field,"Actions") || (!creating&&matches!(*field,"Policy"|"Parent"))) {continue;}
                     let text = fields.get(field);
+                    if record.kind==Kind::AccessProfile && record.kind.optional(field) && text.is_empty(){if record.values.contains_key(*field){remove.push((*field).into());}continue;}
                     if text.is_empty()&&record.kind.optional(field)&&matches!(*field,"VlanId"|"Priority") {
                         if record.values.contains_key(*field){remove.push((*field).into());}continue;
                     }
@@ -2087,24 +2177,22 @@ pub fn open() -> i32 {
         w.surface = weak.clone();
         fields.set("listeners", &listeners(&w.stored));
     });
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(Duration::from_secs(3));
-            let Some(surface) = weak.upgrade() else {
-                return;
-            };
-            let stored = read();
-            let overview = overview();
-            surface.update(|w, fields| {
-                if let Some(monitor) = &w.diagnostic_monitor {
-                    w.diagnostics = monitor.snapshot();
-                }
-                if !w.busy {
-                    w.heard(stored, fields);
-                    w.overview = overview;
-                }
-            });
-        }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(3));
+        let Some(surface) = weak.upgrade() else {
+            return;
+        };
+        let stored = read();
+        let overview = overview();
+        surface.update(|w, fields| {
+            if let Some(monitor) = &w.diagnostic_monitor {
+                w.diagnostics = monitor.snapshot();
+            }
+            if !w.busy {
+                w.heard(stored, fields);
+                w.overview = overview;
+            }
+        });
     });
     match app.run() {
         Ok(()) => 0,
@@ -2367,5 +2455,31 @@ mod tests {
         assert!(html.contains("Reveal Secret"));
         assert!(!html.contains("Select and copy this value"));
         assert!(html.contains("type=\"password\""));
+    }
+
+    #[test]
+    fn rich_profile_fields_share_metadata_and_preserve_rule_priority_label() {
+        let html = authorization_form(true);
+        for field in radius_authorization::FIELDS {
+            assert!(html.contains(field.name), "missing {}", field.name);
+            assert!(html.contains(field.group), "missing {}", field.group);
+        }
+        assert!(html.contains("bits/second"));
+        assert!(html.contains("Use equipment default"));
+        assert!(html.contains("SessionExpiryAction"));
+        assert!(label("Priority").contains("inherit"));
+        let mut w = window();
+        w.explanation = Some(
+            serde_json::json!({"explanation":{"assignment":{"settings":{"Priority":0}},"outcome":"assigned","rules":[]}}),
+        );
+        assert!(w.explain_page().contains("Traffic Priority"));
+        w.section = "dynamic-profile";
+        w.edit = Some(Record::new(Kind::DynamicProfile, "Example").unwrap());
+        w.creating = true;
+        let html = w.render(&Facts {
+            views: 1,
+            fields: &Fields::default(),
+        });
+        assert!(html.contains("WISPr"));
     }
 }

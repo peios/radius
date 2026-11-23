@@ -149,8 +149,8 @@ The manuals are [radiusd(8)](docs/man/radiusd.8) and
 [radius(8)](docs/man/radius.8).
 
 `registry.d` holds the Registry seeds the radius package installs: the radiusd
-service definition, which starts at no time until `radius service boot on`,
-its identity's authd capability and privileges, and reservations of UDP ports
+service definition, with automatic startup disabled until
+`radius service boot on`, its identity's authd capability and privileges, and reservations of UDP ports
 1812 and 1813 for it. `tools/gen-port-seed.py` regenerates the reservations.
 
 For an offline VM with persistent state and replaceable raw binaries, see

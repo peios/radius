@@ -149,7 +149,7 @@ Stopping it interrupts authentication; stations already connected keep their acc
 Have
 .B radiusd
 start at boot, or not, without starting or stopping it now.
-The radius package defines the service to start at no time.
+The radius package leaves automatic startup disabled.
 .SH OPTIONS
 .TP
 .B \-\-json
@@ -178,6 +178,11 @@ Open the RADIUS window.
 .B radius service boot on
 .B radius service start
 .fi
+.PP
+Replace the placeholder GUIDs and group SID with actual values.
+The client receives a generated shared secret; reveal it with
+.B radius client secret AccessPoints show
+and configure the access point with the same secret.
 .SH EXIT STATUS
 .TP
 .B 0

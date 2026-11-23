@@ -39,7 +39,7 @@ Run
 .B regman Machine\eSoftware\eRadius
 for each value.
 .PP
-It listens for authentication on UDP port 1812 of every address by default.
+It listens for authentication on UDP port 1812 of every IPv4 address by default.
 The radius package reserves UDP ports 1812 and 1813 for it.
 .SH SECURITY
 The service account may ask
@@ -55,7 +55,10 @@ The service stopped.
 .TP
 .B 1
 .B radiusd
-could not start: it was given an argument, it runs under the wrong identity, or it could not open its status endpoint, its accounting ledger or a listener.
+failed, for example because it was given an argument, runs under the wrong identity, or could not open a local endpoint or start a worker.
+An authentication listener bind failure leaves the service running with invalid configuration; inspect
+.B radius status
+for the error.
 .SH FILES
 .TP
 .I /run/radiusd/control.sock
@@ -79,10 +82,12 @@ The radius package defines the service, grants its identity what it needs and re
 .I radiusd\-policy.reg
 and
 .IR radiusd\-port.reg .
-The service starts at no time until an administrator runs
-.B radius config init
-and
-.BR "radius service boot on" .
+Installing the package does not start the service.
+After configuring it, run
+.B radius service start
+to start it now, and
+.B radius service boot on
+to enable startup on subsequent boots.
 .PP
 Creating
 .I /var/state/radius

@@ -17,7 +17,7 @@ radius-accounting = { path = "../radius-accounting" }
 radius-policy = { path = "../radius-policy" }
 serde_json = "1"
 zeroize.workspace = true
-peios = { git = "https://github.com/peios/peios-rs.git", rev = "623520bc0405fdd4526bab45f45882e7f19b1ab1", optional = true }
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "ebb1e39ca99ae8371dd9e8dc45844feb474d056c", optional = true }
 libc = { version = "0.2", optional = true }
-gxwi = { git = "https://github.com/peios/gxwi.git", rev = "0cdbd97c86ca0e78138c6b320d88d5be8e2a6407", optional = true }
-gxwi-sd-editor = { git = "https://github.com/peios/gxwi-essentials.git", rev = "bde15e2817e2e096c4f3ba1c6f7ef37ea1a997e4", default-features = false, features = ["registry", "splice"], optional = true }
+gxwi = { git = "https://github.com/peios/gxwi.git", rev = "a8a92eb6f9127319310b3f8ad2c31f436a1f9281", optional = true }
+gxwi-sd-editor = { git = "https://github.com/peios/gxwi-essentials.git", rev = "7b641ee2601a34920b5d8f468bc3597efc9b17c1", default-features = false, features = ["registry", "splice"], optional = true }
